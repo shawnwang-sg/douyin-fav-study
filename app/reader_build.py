@@ -11,15 +11,22 @@ from . import config, db, yuedu
 from . import topics as topics_mod
 from .reader_page import CSS, DELBTN, JS as _JS, LIMIT, PLAYBTN, cat_key, inline, render
 from . import reader_topics as RT
+from . import reader_extra as RX
+from .fsindex import FsIndex
 
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
 # 删除记录存到学习库（data/deleted.json），换浏览器也在；同时保留原来的 localStorage
 JS = _JS.replace(
     "const saveDel=()=>{try{localStorage.setItem(DKEY,JSON.stringify([...DEL]))}catch(e){}};",
-    "const saveDel=()=>{try{localStorage.setItem(DKEY,JSON.stringify([...DEL]))}catch(e){}"
+    "const saveDel=()=>{if(window.__delInit)return;try{localStorage.setItem(DKEY,JSON.stringify([...DEL]))}catch(e){}"
     "fetch('/api/library/deleted',{method:'POST',headers:{'Content-Type':'application/json'},"
     "body:JSON.stringify({ids:[...DEL].map(Number)})}).catch(()=>{})};").replace(
+    # 打开页面时把回收站里的条目藏起来：这一步不用存盘（原来每条都发一次保存请求，还会让整页缓存作废）；
+    # 只有这个浏览器里记的和学习库里存的不一样时，才存一次
+    "DEL.forEach(id=>{if(els(id).length)del(id)});refreshBin();",
+    "window.__delInit=1;DEL.forEach(id=>{if(els(id).length)del(id)});window.__delInit=0;"
+    "if(DEL.size!==PRE_DEL.length||PRE_DEL.some(i=>!DEL.has(String(i))))saveDel();refreshBin();").replace(
     "<td><button class=del data-restore=1>恢复</button></td>",
     "<td style=white-space:nowrap><button class=del data-restore=1>恢复</button> "
     "<button class=purge title='删掉记录和笔记（本地视频文件不动）；以后代刷不会再刷到它，同步收藏、手动添加仍可以加回来'>彻底删除</button></td>").replace(
@@ -32,6 +39,7 @@ JS = _JS.replace(
  const sr=typeof PRE_SEARCH!=='undefined'&&PRE_SEARCH.includes(+el.dataset.id);
  return (sr?'代刷 · ':'')+[b?b.firstChild.textContent:'',h2,h3].filter(Boolean).join(' › ')}return '待处理'}""")
 assert "PRE_SEARCH" in JS, "回收站 where() 没替换上"
+assert "__delInit=0" in JS, "打开页面时不存盘 没替换上"
 
 TOPBAR_CSS = """
 .topbar{display:flex;align-items:center;gap:4px 18px;flex-wrap:wrap;font-size:14px;margin:-8px 0 14px;
@@ -84,7 +92,13 @@ def save_deleted(ids):
         except Exception:
             pass
     ids = {int(i) for i in ids}
-    DELETED_PATH.write_text(json.dumps({"ids": sorted(ids), "restored": sorted(old - ids)}), encoding="utf-8")
+    text = json.dumps({"ids": sorted(ids), "restored": sorted(old - ids)})
+    try:
+        if DELETED_PATH.read_text(encoding="utf-8") == text:
+            return  # 没变就不写：文件的修改时间不动，学习库整页的缓存还能接着用
+    except OSError:
+        pass
+    DELETED_PATH.write_text(text, encoding="utf-8")
 
 
 def _restored():
@@ -105,16 +119,17 @@ def _topic_map():
     return tmap
 
 
-def media_link(x):
-    """「原视频」：页内弹窗播放本地视频（/media/<id>）；图文弹出本地图片。本地文件不在时退回线上链接。"""
+def media_link(x, fs=None):
+    """「原视频」：页内弹窗播放本地视频（/media/<id>）；图文弹出本地图片。本地文件不在时退回线上链接。
+    fs：FsIndex，按文件夹整个列一次来判断文件在不在（几千条逐个问磁盘要半秒多）。"""
     p = Path(x.get("_path") or "")
-    try:
-        exists = bool(x.get("_path")) and p.exists()
-    except OSError:
-        exists = False
-    if exists:
-        if p.is_dir():
-            imgs = sorted(f.name for f in p.iterdir() if f.suffix.lower() in IMG_EXT)
+    kind = (fs or FsIndex()).kind(x.get("_path"))
+    if kind:
+        if kind == "dir":
+            try:
+                imgs = sorted(f.name for f in p.iterdir() if f.suffix.lower() in IMG_EXT)
+            except OSError:
+                imgs = []
             if imgs:
                 srcs = json.dumps([f"/media/{x['id']}/{urllib.parse.quote(n)}" for n in imgs])
                 return f"<a href='#' class=play data-imgs='{html.escape(srcs)}'>原图文</a>"
@@ -126,14 +141,21 @@ def media_link(x):
     return ""
 
 
-def row(x):
+def row(x, fs=None):
     return (f"<tr data-id='{x['id']}'><td>#{x['id']}</td><td>{html.escape(x.get('_folder', ''))}</td>"
             f"<td>{html.escape(x.get('theme') or '')}</td><td>{html.escape(x.get('_author', ''))}</td>"
-            f"<td>{html.escape(x.get('reason') or '')}</td><td>{media_link(x)}</td><td>{DELBTN}</td></tr>")
+            f"<td>{html.escape(x.get('reason') or '')}</td><td>{media_link(x, fs)}</td><td>{DELBTN}</td></tr>")
 
 
-def build():
-    """生成整页 HTML（字符串）。"""
+def week_start():
+    """本周一 0 点的时间戳（和周报的算法一样）。"""
+    lt = time.localtime()
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday - lt.tm_wday, 0, 0, 0, 0, 0, -1))
+
+
+def build(fs=None):
+    """生成整页 HTML（字符串）。fs：FsIndex，调用方之后可以用 fs.dirs() 知道这页依赖哪些文件夹。"""
+    fs = fs or FsIndex()
     t = yuedu.taxonomy()
     tab_names = [x["name"] for x in t["tabs"]]
     tmap = _topic_map()
@@ -169,13 +191,12 @@ def build():
     title = "学习库"
     hidden = set(deleted_ids()) - _restored()  # 在回收站里的（含代刷来的）：不算进总数和分类条数
     P = ["<!doctype html><html lang=zh><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>",
-         f"<title>{title} · 收藏学习台</title><link rel=icon href='/static/logo.svg'><style>{CSS}{TOPBAR_CSS}{RT.CSS}</style><body><main>",
-         "<nav class=topbar><b>收藏学习台</b><a href='/#/process'>添加与处理</a><a class=cur href='/reader'>学习库</a>"
+         f"<title>{title} · 收藏学习台</title><link rel=icon href='/static/logo.svg'><style>{CSS}{TOPBAR_CSS}{RT.CSS}{RX.CSS}</style><body><main>",
+         "<nav class=topbar><b>收藏学习台</b><a class=cur href='/reader'>学习库</a><a href='/#/process'>添加与处理</a>"
          "<a href='/#/graph'>知识网络</a><a href='/#/weekly'>每周周报</a><span class=sp></span><a href='/#/settings'>设置</a></nav>",
          f"<header><h1>{title}</h1>",
-         f"<p class=sub>抖音 + 小红书收藏 · 视频转写稿 · 去口水词、改错字、不改原话 · 共 {sum(1 for x in qc if x['id'] not in hidden)} 篇 · "
-         f"更新于 {time.strftime('%Y-%m-%d %H:%M')}</p>",
-         "<input id=q type=search placeholder='搜索标题、金句、作者……' autocomplete=off></header><nav class=tabs>"]
+         RX.ibar(sum(1 for x in qc if x['id'] not in hidden), time.strftime('%Y-%m-%d %H:%M')),
+         "<input id=q type=search placeholder='搜索标题、金句、作者、正文……（按 / 聚焦，空格隔开多个词）' autocomplete=off></header><nav class=tabs>"]
     order = tab_names + sorted(k for k in keep if k not in tab_names)
     tabs = [f for f in order if keep.get(f)] + [f for f in order if not keep.get(f)]
     P.append(RT.STAR_BUTTON + RT.TAB_BUTTON)  # 特殊 tab：精品、专题整理放最前
@@ -216,7 +237,7 @@ def build():
                     pf = "小红书" if x["_platform"] == "xhs" else "抖音"
                     s = html.escape((x.get("theme", "") + x.get("gold", "") + x["_author"] + pf).lower())
                     P.append(f"<article id='a{x['id']}' data-id='{x['id']}' data-s='{s}'>"
-                             f"<div class=hd><h5>{inline(x.get('theme', ''))}</h5>{media_link(x)}</div>"
+                             f"<div class=hd><h5>{inline(x.get('theme', ''))}</h5>{media_link(x, fs)}</div>"
                              f"<div class=src><span>—— {html.escape(x['_author'] or '佚名')}<span class=pf>{pf}</span>"
                              f"<a class=nt href='/#/item/{x['id']}' title='笔记详情：精读、自测、我的笔记'>笔记 ›</a></span>{DELBTN}</div>"
                              f"<div class=gold>{inline(x.get('gold', ''))}</div><div class=body>{render(x.get('body', ''))}</div></article>")
@@ -231,7 +252,7 @@ def build():
     for tp in std + sorted(k for k in by if k not in std):
         if by.get(tp):
             P.append(f"<h3>{html.escape(tp)}<span class=cnt>{len(by[tp])}</span></h3><table>")
-            P += [row(x) for x in sorted(by[tp], key=lambda x: (x["_folder"], x["id"]))]
+            P += [row(x, fs) for x in sorted(by[tp], key=lambda x: (x["_folder"], x["id"]))]
             P.append("</table>")
     P.append("<h2>不整理的（其他）</h2><p class=note>影视剧台词、时事、体育新闻、广告招生等，只列在这里，不收进阅读版。</p>")
     bym = collections.defaultdict(list)
@@ -239,7 +260,7 @@ def build():
         bym[x.get("move_to") or yuedu.OTHER].append(x)
     for tp in sorted(bym):
         P.append(f"<h3>建议移到「{html.escape(tp)}」<span class=cnt>{len(bym[tp])}</span></h3><table>")
-        P += [row(x) for x in sorted(bym[tp], key=lambda x: x["id"])]
+        P += [row(x, fs) for x in sorted(bym[tp], key=lambda x: x["id"])]
         P.append("</table>")
     P.append("</section>")
 
@@ -261,6 +282,10 @@ def build():
     pre = sorted(set(deleted_ids()) - _restored())
     starred = [r[0] for r in db.conn().execute("SELECT id FROM items WHERE starred=1")]  # 精品
     hl = json.dumps(topics_mod.highlights(), ensure_ascii=False).replace("</", "<\\/")  # 高亮过的句子
-    P.append(f"</main>{GOTOP}{RT.HTML}<script>const PRE_DEL={json.dumps(pre)},PRE_STAR={json.dumps(starred)},PRE_SEARCH={json.dumps(sorted(search_ids()))},PRE_HL={hl},PAGE_NAME='学习库';</script>" + JS
-             + RT.JS.replace("${PLAYBTN_HTML}", PLAYBTN))
+    read = [r[0] for r in db.conn().execute("SELECT id FROM items WHERE learned=1")]  # 已读
+    week = [r[0] for r in db.conn().execute(  # 本周新进学习库的
+        "SELECT id FROM items WHERE status='done' AND COALESCE(fav_at, created_at) >= ?", (week_start(),))]
+    P.append(f"</main>{GOTOP}{RT.HTML}<script>const PRE_DEL={json.dumps(pre)},PRE_STAR={json.dumps(starred)},PRE_SEARCH={json.dumps(sorted(search_ids()))},PRE_HL={hl},"
+             f"PRE_READ={json.dumps(read)},PRE_WEEK={json.dumps(week)},PAGE_NAME='学习库';</script>" + JS
+             + RT.JS.replace("${PLAYBTN_HTML}", PLAYBTN) + RX.JS)
     return "".join(P)
