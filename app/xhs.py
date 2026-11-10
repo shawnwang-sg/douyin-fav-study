@@ -721,11 +721,19 @@ class Browser:
         urls = []
         if is_video:
             st = ((n.get("video") or {}).get("media") or {}).get("stream") or {}
-            for codec in ("h264", "h265", "av1", "h266"):
-                for it in st.get(codec) or []:
-                    for u in [it.get("masterUrl")] + list(it.get("backupUrls") or []):
-                        if u and u not in urls:
-                            urls.append(u)
+            # 所有编码（h264 / h265 / 新的 EF4~EF7 …）里只要自带音轨的完整 mp4，从小到大（最低画质优先）；
+            # 登录后常给只有画面的 DASH 分片（.m4s，音频另一路），下下来没声音
+            streams = [it for v in st.values() if isinstance(v, list) for it in v if isinstance(it, dict)]
+
+            def ok(it):
+                u = it.get("masterUrl") or next(iter(it.get("backupUrls") or []), "") or ""
+                return ((it.get("audioChannels") or 0) > 0 or it.get("audioCodec")) and ".m4s" not in u \
+                    and (it.get("format") or "").lower() not in ("m4s", "dash")
+            good = sorted((it for it in streams if ok(it)), key=lambda it: (it.get("size") or 0, it.get("height") or 0))
+            for it in good or streams:
+                for u in [it.get("masterUrl")] + list(it.get("backupUrls") or []):
+                    if u and u not in urls:
+                        urls.append(u)
         else:
             for im in n.get("imageList") or []:
                 u = im.get("urlDefault") or im.get("url") or next(

@@ -14,18 +14,29 @@ sys.path.insert(0, sys.argv[1])
 from source import XHS  # noqa: E402
 from source.application.video import Video  # noqa: E402
 
+def has_audio(i):
+    """这一路流自带音轨、而且是完整的 mp4（不是 DASH 的 .m4s 分片：登录后常给只有画面的分片，音频单独一路）。"""
+    url = getattr(i, "masterUrl", None) or next(iter(getattr(i, "backupUrls", None) or []), "") or ""
+    fmt = (getattr(i, "format", "") or "").lower()
+    return bool((getattr(i, "audioChannels", 0) or 0) > 0 or getattr(i, "audioCodec", None)) \
+        and ".m4s" not in url and fmt not in ("m4s", "dash")
+
+
 if os.environ.get("XHS_QUALITY", "low") == "low":
-    # 用户要最低画质（省空间）。也只挑 h264：原画（originVideoKey）常是没有音轨的 HEVC，下下来没声音。
+    # 用户要最低画质（省空间），但一定要带声音：所有编码（h264 / h265 / av1 / 新的 EF4~EF7 …）里，
+    # 只挑自带音轨的完整 mp4，取最小的；一个都没有才用 XHS-Downloader 自己的选法。
     _orig = Video.deal_video_link.__func__
 
     def _lowest(cls, data, preference="resolution"):
-        for key in ("h264", "h265", "av1", "h266"):
-            items = data.safe_extract(f"video.media.stream.{key}", []) or []
-            items = [i for i in items if getattr(i, "masterUrl", None) or getattr(i, "backupUrls", None)]
-            if items:
-                items.sort(key=lambda x: (getattr(x, "size", 0) or 0, getattr(x, "height", 0) or 0))
-                b = items[0]
-                return [b.masterUrl] if getattr(b, "masterUrl", None) else [b.backupUrls[0]]
+        st = data.safe_extract("video.media.stream")
+        items = []
+        for key in getattr(st, "__dict__", {}).keys():
+            items += [i for i in (data.safe_extract(f"video.media.stream.{key}", []) or [])
+                      if (getattr(i, "masterUrl", None) or getattr(i, "backupUrls", None)) and has_audio(i)]
+        if items:
+            items.sort(key=lambda x: (getattr(x, "size", 0) or 0, getattr(x, "height", 0) or 0))
+            b = items[0]
+            return [b.masterUrl] if getattr(b, "masterUrl", None) else [b.backupUrls[0]]
         return _orig(cls, data, preference)
 
     Video.deal_video_link = classmethod(_lowest)
