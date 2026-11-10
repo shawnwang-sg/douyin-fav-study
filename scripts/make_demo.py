@@ -70,4 +70,16 @@ topics.topic_note(t, "【猫步入门：先学会走路】\n> 上步先落脚跟
 db.update(ids[0], starred=1)
 db.update(ids[3], starred=1)
 topics.hl_add(ids[0], "慢才能练出控制")
-print(f"演示数据已生成：{target}（{len(ids)} 篇文章、1 个专题）")
+
+# 几条被跳过的（「添加与处理 → 已跳过」按原因分组）
+SKIPPED = [
+    ("douyin", "示例：一段纯音乐的风景视频", "视频里几乎没有说话内容（可能是纯音乐或无对白）"),
+    ("xhs", "示例：一张图配一句话", "没信息量：画面为主"),
+    ("douyin", "示例：90 分钟的直播回放", "超过 15 分钟的长视频，暂不转写，已单独存放"),
+    ("xhs", "示例：说到一半就断了", "没信息量：残缺"),
+]
+for k, (plat, title, reason) in enumerate(SKIPPED, 50):
+    aid = f"{7000000000000000000 + k}" if plat == "douyin" else f"{k:024x}"
+    iid, _ = db.add("favorite", aweme_id=aid, url="", title=title, author="示例作者", platform=plat)
+    db.update(iid, status="skipped", reason=reason)
+print(f"演示数据已生成：{target}（{len(ids)} 篇文章、{len(SKIPPED)} 条已跳过、1 个专题）")

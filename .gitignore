@@ -11,3 +11,6 @@ Thumbs.db
 # 打包安装包时的临时文件和产物
 build/
 dist/
+# 本地视频库、外部工具（XHS-Downloader）：只在你自己电脑上
+视频库/
+tools/

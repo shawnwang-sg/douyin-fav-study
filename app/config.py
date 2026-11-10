@@ -16,8 +16,10 @@ MODELS_DIR = DATA / "models"        # Whisper 模型缓存
 BROWSER_DIR = DATA / "browser"      # 抖音登录态（浏览器配置目录）
 XHS_BROWSER_DIR = DATA / "browser_xhs"  # 小红书登录态（和抖音分开，互不影响）
 DEFAULT_LIBRARY = DATA / "知识库"    # Markdown 笔记（可当 Obsidian 库打开）
-DEFAULT_DOWNLOADS = Path.home() / "Videos" / "抖音下载"  # 「仅下载」保存的位置
-DEFAULT_XHS_DOWNLOADS = Path.home() / "Videos" / "小红书下载"
+VIDEO_LIBRARY = ROOT / "视频库"     # 本地视频库：下载的视频、图文都放这里，按平台、收藏夹分类分文件夹
+DEFAULT_DOWNLOADS = VIDEO_LIBRARY / "抖音"
+DEFAULT_XHS_DOWNLOADS = VIDEO_LIBRARY / "小红书"
+TOOLS_DIR = ROOT / "tools"          # 外部工具（XHS-Downloader 等）
 
 PLATFORMS = {"douyin": "抖音", "xhs": "小红书"}
 
@@ -114,8 +116,9 @@ DEFAULTS = {
     "skip_long": True,                  # 超过 max_minutes 的视频整条跳过（不只截前 N 分钟）
     "auto_extract": True,              # False = 只转文字，转好后停在「待提炼」，手动点「提炼」
     "import_dir": "",                   # 上次「导入本地文件夹」用的文件夹
-    "download_dir": "",                 # 抖音视频库（下载位置），空 = 默认（视频\抖音下载）
-    "xhs_download_dir": "",             # 小红书视频库，空 = 默认（视频\小红书下载）
+    "download_dir": "",                 # 抖音视频库（下载位置），空 = 程序目录\视频库\抖音
+    "xhs_download_dir": "",             # 小红书视频库，空 = 程序目录\视频库\小红书
+    "xhs_downloader_dir": "",           # XHS-Downloader 的位置，空 = 程序目录\tools\XHS-Downloader（没有就用 用户目录\XHS-Downloader）
     "xhs_folders": [],                  # 小红书收藏专辑缓存
     "xhs_folders_at": 0,
     "sync_platform": "douyin",          # 上次同步选的平台：douyin / xhs

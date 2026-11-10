@@ -1,423 +1,307 @@
-<p align="center"><img src="docs/logo.svg" width="88" alt="logo"></p>
+<p align="center"><img src="docs/logo.svg" width="96" alt="收藏学习台"></p>
 
-<h1 align="center">收藏学习台 · Douyin Fav Study</h1>
+<h1 align="center">收藏学习台 · Fav Study</h1>
 
-<p align="center">把抖音收藏的干货视频和图文，变成能学、能测、能复习的本地笔记<br>
-Turn your saved Douyin videos &amp; image posts into local study notes you can learn, quiz and review.</p>
+<p align="center">把抖音、小红书里收藏的干货视频，变成一本能读、能划线、能按专题学的本地书<br>
+Turn the videos you save on Douyin and Xiaohongshu into a local, readable library you can highlight and study by topic.</p>
 
 <p align="center">
-<a href="https://github.com/yuanshengbo8-sketch/douyin-fav-study/releases/latest"><img alt="version" src="https://img.shields.io/github/v/release/yuanshengbo8-sketch/douyin-fav-study?label=version&color=0071e3"></a>
 <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555">
+<img alt="python" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-3776ab">
+<img alt="sources" src="https://img.shields.io/badge/%E6%94%B6%E8%97%8F-%E6%8A%96%E9%9F%B3%20%2B%20%E5%B0%8F%E7%BA%A2%E4%B9%A6-c36a2d">
 <img alt="license" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-orange">
 </p>
 
-<p align="center">
-<a href="https://github.com/yuanshengbo8-sketch/douyin-fav-study/releases/latest"><img alt="下载 Windows 安装包" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%20Windows%20%E5%AE%89%E8%A3%85%E5%8C%85-%E5%8F%8C%E5%87%BB%E5%AE%89%E8%A3%85%EF%BC%8C%E4%B8%8D%E7%94%A8%E8%A3%85%20Python-0071e3?style=for-the-badge&logo=windows&logoColor=white"></a>
-<br>
-<sub>Mac 或想用脚本安装：看下面的 <a href="#快速开始--quick-start">快速开始</a></sub>
-</p>
+**抖音 / 小红书收藏 → 下载进本地视频库 → 本机转文字 → AI 保留原话润色排版 → 学习库（阅读版）→ 专题学习**
 
-**抖音链接 / 收藏夹 → 下载 → 本机语音转文字 / 图片文字识别 → AI 提炼 → 学习网站 + Markdown 笔记 + PDF**
+- 视频只在你自己的电脑上下载、转写；只有文字会发给你自己选的 AI（也可以用本机的 Claude Code / Codex 订阅）
+- 用你自己的抖音、小红书登录，一条一条慢慢读，防封号
+- 学习库就是一本按「分类 → 大类 → 小主题」排好的书：划线、记笔记、按专题把视频攒到一起看
 
-- 视频、音频、图片只在你自己的电脑上处理，只有文字会发给你自己选的 AI 服务商
-- 用的是你自己的抖音登录和你自己的 AI Key，所有数据都保存在本机
-- 笔记是普通的 `.md` 文件，可以直接用 Obsidian、Typora 打开，不会被这个软件锁死
-
-> Everything runs locally on your own machine: your own Douyin login, your own AI key of choice (Claude, DeepSeek, Kimi, Qwen, GLM, SiliconFlow, OpenAI, Gemini or any OpenAI-compatible API, including free tiers). Notes are plain Markdown files. The UI is in Chinese.
-
-## 这个分支新增了什么 · What's new in this fork
-
-这是 [yuanshengbo8-sketch/douyin-fav-study](https://github.com/yuanshengbo8-sketch/douyin-fav-study) 的分支，在原版基础上加了小红书、阅读版学习库和专题学习。下面的截图都是演示数据（`scripts/make_demo.py` 生成），不含任何个人收藏。
-
-> 页面上方的「下载 Windows 安装包」是原项目的安装包，不含本分支的功能。要用本分支，请 `git clone` 本仓库，再按下面「快速开始」用安装脚本安装。
-
-This fork adds Xiaohongshu (RedNote) support, a reading-style library, and topic-based study on top of the original project. Screenshots below use demo data only.
-
-**抖音 + 小红书合一**
-
-- 收藏同步、链接添加、下载都支持抖音和小红书；小红书优先用 XHS-Downloader（最低画质、带音轨），失败了才用登录的浏览器窗口
-- 防封号：所有下载一条一条来；小红书有冷却、每日上限、随机间隔；浏览器窗口不反复开关、不反复刷新
-- 整理前先检查登录：过期就弹出登录窗口，点「我登好了」再查；分得清 xiaohongshu.com 和海外网络跳去的 rednote.com（两边登录不通用）；有一个平台登不上也可以只整理已登录的
-- 每个条目有唯一的 uid（`dy:作品ID` / `xhs:笔记ID` / `file:本地文件指纹`），数据库唯一索引去重
-- 每周整理：读到连续 20 条已有的就停；按月整理：抖音按接口里的真实收藏时间读满 30 天；整理中途可以停止，重启后接着做
-
-**学习库 = 阅读版**（[video-yuedu](https://github.com/shawnwang-sg/agent-skills) 的版面）
-
-- 转写稿按「保留原话」规则润色：改错字、去口水词、分段排版，逐字改动不超过 15%，超了自动让 AI 改回原话
-- 按「分类 → 大类 → 小主题」排目录，侧边导航，原视频弹窗播放，连播 / 洗牌
-- 选中文字：**一键三连**（复制 + 高亮 + 加入专题笔记）、高亮、复制；高亮会保存
-- ★ **精品**：点亮文章标题前的星，复制一份到「精品」tab，保留原分类作目录
-- 回收站：删除可恢复，也可以「彻底删除」（元信息留底）；已跳过的条目按原因分组，可以整组加入整理
-
-![阅读版学习库](docs/screenshots/reader.png)
-
-**专题整理：集中学习的地方**
-
-- 自己建三级分类，每个分类下建专题；在任意文章上点「＋专题」，可以连着选好几条一起加进去
-- 专题里集中看、连播；右侧是随手记的**专题笔记**，自动保存；摘抄按出处归在一起
-- **复制到桌面**：按「专题学习 / 一级 / 二级 / 三级 / 专题」建文件夹，视频按顺序编号，笔记存成 `笔记.md`，方便剪辑
-- **代刷**：用抖音、小红书自己的搜索按关键词各找 N 条新视频，插队处理、润色后放进专题；AI 判断和专题完全无关的自动拿出专题。代刷来的统一放进回收站（按原分类排好），不混进你自己的收藏，在回收站点「恢复」才进收藏
-- 页面要验证或登录时，代刷会把浏览器窗口提到前面等你处理，每 5 秒看一次，完成后自动接着搜
-
-<table>
-<tr>
-<td><img src="docs/screenshots/topic.png" alt="专题整理"><br><sub>专题整理：三级分类、专题文章、右侧专题笔记</sub></td>
-<td><img src="docs/screenshots/selection.png" alt="选中文字"><br><sub>选中文字：一键三连 / 高亮 / 复制 / 加入专题笔记</sub></td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/feed.png" alt="代刷"><br><sub>代刷：按关键词各找 N 条新视频补进专题</sub></td>
-<td><img src="docs/screenshots/starred.png" alt="精品"><br><sub>精品：保留原分类的目录</sub></td>
-</tr>
-</table>
-
-**其他**
-
-- AI 可以用本机的 Claude Code / Codex 订阅（命令行），不用另外买 API
-- 「添加与处理」页面省资源：处理中 2 秒、空闲 6 秒刷新一次，标签页在后台时不刷新，列表没变就不重画
-- 试用 / 截图用的演示数据：`python scripts/make_demo.py demo_data`，再用 `FAVSTUDY_DATA=demo_data python -m app --port 8770` 启动（Windows PowerShell 写 `$env:FAVSTUDY_DATA="demo_data"`）。环境变量 `FAVSTUDY_DATA` 可以把数据目录放到任何地方
-
-## 讲解视频 · Video
-
-https://github.com/user-attachments/assets/00f61aff-8f26-4cbc-a444-ab62e3a569c5
-
-上面是约 50 秒的短版。约 3 分钟的完整版（安装、启动、配置 API、使用）：[下载 douyin-fav-study-intro-full.mp4](https://github.com/yuanshengbo8-sketch/douyin-fav-study/releases/download/v1.0.1/douyin-fav-study-intro-full.mp4)
-The full 3-minute walkthrough is attached to the [v1.0.1 release](https://github.com/yuanshengbo8-sketch/douyin-fav-study/releases/tag/v1.0.1).
-
-![学习库](docs/screenshots/library.png)
+> Everything runs on your own computer with your own Douyin / Xiaohongshu login. Transcripts are lightly cleaned up by the AI you choose (typos and filler words only, at most 15% changed) and laid out as a readable library, organised by category, with highlights, starred picks and topic collections. The UI is in Chinese.
 
 ## 功能一览 · Features
 
 | | |
 |---|---|
-| **两种添加方式**：粘贴分享链接，或一键同步整个收藏夹 | **视频 + 图文**：视频转文字，图文用本机文字识别 |
-| **本机转写**：苹果芯片 Mac 用 mlx-whisper 加速，其他电脑用 faster-whisper；有字幕直接用字幕 | **AI 提炼**：总结、核心观点、照着做、工具、概念、自测题，自动分类 |
-| **带我精读**：核心结论、思维导图、带时间戳的大纲、“你真的懂了吗”追问、10 道测验、Anki 卡片、问老师 | **进度条和剩余时间**：按你电脑的实际速度估算 |
-| **免费方案**：智谱 GLM / 硅基流动 / Gemini，粘贴 Key 一键配置 | **备份与恢复**：一个 zip 搬家，恢复前自动留底 |
-| **知识网络**：有共同关键词的笔记连成图谱；AI 找出多条视频互相印证的共识观点和说法不一致的地方 | **每周周报**：新增、学会、精读、测验、AI 消耗，连续学习几周 |
-| **Windows 一键安装包**：内置 Python 和全部组件，双击安装就能用 | **Markdown + PDF**：笔记是普通 `.md` 文件，可当 Obsidian 库；也能导出 PDF |
+| **两个平台一起管**：抖音、小红书的收藏同步、链接粘贴、下载都支持；本地视频库按平台、收藏夹分类放好 | **保留原话的润色**：只改错字、删口水词、补标点、分段加小标题，逐字改动超过 15% 自动让 AI 改回原话 |
+| **学习库 = 阅读版**：一篇篇排好的文章，侧边目录，原视频弹窗播放，一个分类连播 / 洗牌 | **划线和笔记**：选中文字一键三连（复制 + 高亮 + 加入专题笔记），高亮会保存 |
+| **专题整理**：自建三级分类和专题，从任何分类挑视频进来集中学；每个专题一份随手记的笔记 | **复制到桌面**：专题里的视频按顺序编号复制到「专题学习」文件夹，方便剪辑 |
+| **代刷**：按关键词用抖音、小红书自己的搜索补新视频进专题，插队处理，AI 判断无关的自动拿出 | **精品**：给文章点星，复制一份到「精品」tab，保留原分类作目录 |
+| **每周 / 按月整理**：一键增量同步两个平台的新收藏，下载、转写、润色，生成周报；随时可以停 | **防封号**：一条一条来，小红书有冷却、每日上限、随机间隔；整理前先检查登录 |
+| **回收站**：删除可以恢复，也可以彻底删除；代刷来的统一先放回收站，不混进你的收藏 | **去重**：每条收藏一个唯一的 uid（平台 + 作品 ID，或本地文件指纹），同一个视频进不来两次 |
 
 <table>
 <tr>
-<td><img src="docs/screenshots/knowledge-graph.png" alt="知识网络"><br><sub>知识网络：有共同关键词的笔记连成线，菱形是共识观点</sub></td>
-<td><img src="docs/screenshots/weekly.png" alt="每周周报"><br><sub>每周周报：学了什么、连续学习几周、下周先学哪几条</sub></td>
+<td><img src="docs/screenshots/reader.png" alt="学习库"><br><sub>学习库：按分类 → 大类 → 小主题排好的阅读版</sub></td>
+<td><img src="docs/screenshots/topic.png" alt="专题整理"><br><sub>专题整理：三级分类、专题文章、右侧专题笔记</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/deep-reading.png" alt="带我精读"><br><sub>带我精读：核心结论 + 思维导图</sub></td>
-<td><img src="docs/screenshots/understanding-check.png" alt="你真的懂了吗"><br><sub>你真的懂了吗？AI 点评你的回答</sub></td>
+<td><img src="docs/screenshots/selection.png" alt="选中文字"><br><sub>选中文字：一键三连 / 高亮 / 复制 / 加入专题笔记</sub></td>
+<td><img src="docs/screenshots/feed.png" alt="代刷"><br><sub>代刷：按关键词补新视频进专题</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/progress.png" alt="处理进度"><br><sub>每条的进度与剩余时间</sub></td>
-<td><img src="docs/screenshots/image-post.png" alt="图文"><br><sub>图文：原图与识别文字对照</sub></td>
+<td><img src="docs/screenshots/starred.png" alt="精品"><br><sub>精品：点星收藏，保留原分类的目录</sub></td>
+<td><img src="docs/screenshots/reader-dark.png" alt="深色模式"><br><sub>跟随系统的深色模式</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/free-plan.png" alt="免费方案"><br><sub>免费方案一键配置</sub></td>
-<td><img src="docs/screenshots/library-dark.png" alt="深色模式"><br><sub>自动跟随系统深色模式</sub></td>
+<td><img src="docs/screenshots/process.png" alt="添加与处理"><br><sub>添加与处理：抖音 / 小红书切换，同步收藏、粘贴链接、导入本地视频</sub></td>
+<td><img src="docs/screenshots/weekly.png" alt="每周周报"><br><sub>每周周报：一键整理这一周 / 最近 30 天的收藏</sub></td>
 </tr>
 </table>
 
+截图里都是演示数据（[`scripts/make_demo.py`](scripts/make_demo.py) 生成），不是真实收藏。
+
 ## 快速开始 · Quick start
 
-### 从抖音刷到这里的朋友，先看这 4 点
+### 开始前先看这 4 点
 
-1. **要用电脑，手机用不了。** Windows 和 Mac 都行。手机只负责在抖音里复制链接。
-2. **不花钱也能用。** AI 用「免费方案」（智谱 GLM / 硅基流动），用的是你自己账号的免费额度。
-3. **不用写代码。** Windows 下载安装包双击就装好；Mac 跑一个安装脚本。
-4. **你的收藏和笔记只在你自己电脑上。** 只有文字会发给你自己选的 AI。
+1. **要用电脑。** Windows 和 Mac 都行，手机只用来在 App 里复制分享链接。
+2. **可以不花钱。** AI 用设置页的「免费方案」（智谱 GLM / 硅基流动 / Gemini），或者用你本机已经登录的 Claude Code / Codex 订阅。
+3. **不用写代码。** 装一次 Python 3.12，双击安装脚本就好。
+4. **收藏和笔记只在你自己电脑上。** 只有转出来的文字会发给你选的 AI。
 
 ### 10 分钟上手
 
-**第 1 步：安装**
+1. **下载本仓库**：右上角 **Code → Download ZIP** 解压，或者 `git clone https://github.com/shawnwang-sg/douyin-fav-study.git`。
+2. **安装**：装好 [Python 3.12](https://www.python.org/downloads/)，然后 Windows 双击 `install_windows.bat`，Mac 右键 `install_mac.command` → 打开。
+3. **打开**：Windows 双击 `start_windows.bat`，Mac 双击 `start_mac.command`。黑色窗口别关，浏览器会自动打开 `http://127.0.0.1:8765`。
+4. **跟着「开始使用」页走**：配好 AI → 选你收藏的主要是什么 → 粘贴第一条链接 → 打开第一篇文章。之后到「添加与处理」切到小红书，同样能同步收藏。
 
-- **Windows：** 到 [最新版本](https://github.com/yuanshengbo8-sketch/douyin-fav-study/releases/latest) 下载 `DouyinFavStudy-Setup-版本号.exe`，双击安装。桌面会出现「收藏学习台」。不用装 Python。
-- **Mac：** 先装 [Python 3.12](https://www.python.org/downloads/)（**别装 3.13 或更新的**），再下载本仓库（右上角 **Code → Download ZIP**）并解压，右键 `install_mac.command` → 打开。详细步骤见下面「一、安装」。
+<img src="docs/screenshots/start.png" alt="开始使用" width="720">
 
-**第 2 步：打开**
+想先看看效果、不碰自己的账号：用演示数据启动（见下面「[演示数据](#演示数据--demo-data)」）。
 
-双击桌面上的「收藏学习台」（Mac 双击 `start_mac.command`）。会先出现一个黑色窗口，**别关它**，关了程序就退出了。浏览器会自动打开学习台。
-
-**第 3 步：跟着「开始使用」页走**
-
-第一次打开会直接进入「开始使用」页，一共 4 步，做完一步自动打勾：
-
-| 步骤 | 做什么 | 小提示 |
-|---|---|---|
-| ① 配好 AI | 选一个免费方案 → 去它的网站注册 → 创建并复制 API Key → 粘贴回来点「一键配置」 | API Key 就是 AI 网站给你的一串「钥匙」，一般以 `sk-` 开头。人在国内选智谱 GLM 或硅基流动 |
-| ② 选你想学什么 | 点一下：AI 干货、理财、健身减脂、英语、职场、做饭，或者「什么都学」 | 默认只收 AI 相关的。收藏的是别的内容一定要选，不然会被收进「主题无关」 |
-| ③ 添加第一条 | 手机抖音里打开视频 → 分享 → 复制链接，发到微信「文件传输助手」，在电脑上复制下来粘贴进去 | 先试 1 到 3 条。熟了再用「同步抖音收藏夹」一次搬很多 |
-| ④ 打开第一篇笔记 | 等进度条走完，点「打开」 | 第一次要下载语音识别模型（几百 MB），会慢一点，之后就快了 |
-
-### 卡住了？最常见的 5 个情况
+### 卡住了？最常见的情况
 
 | 看到什么 | 怎么办 |
 |---|---|
-| 「API Key 无效（401）」 | Key 没复制完整，或者前后带了空格。回到「设置 → 免费方案」重新粘贴一次 |
-| 「连不上 AI 接口」 | 人在国内请用智谱 GLM、硅基流动、DeepSeek 或 Kimi；Gemini、OpenAI、Claude 需要能访问海外网络 |
-| 「免费额度用完了（429）」 | 一般第二天恢复。先少处理几条，或者换一家 |
-| 同步收藏夹读不到 / 没反应 | 看一眼弹出的浏览器窗口：可能要扫码登录或拖滑块验证。抖音网页改版时同步会暂时失灵，这时用「粘贴分享链接」，效果完全一样 |
-| 笔记都跑到「主题无关」里了 | 回到「开始使用」第 ② 步换主题，或者在「添加与处理 → 主题无关」里点「收进学习库」 |
+| 小红书扫码登录成功，又弹出一个没登录的二维码 | 海外网络会被跳到 rednote.com，它和 xiaohongshu.com 的登录不通用。按登录框里的提示，扫**这个窗口里**的二维码；网络（VPN / 加速器）别在登录后再切换 |
+| 「API Key 无效（401）」 | Key 没复制完整或带了空格，回「设置 → 免费方案」重新粘贴 |
+| 「免费额度用完了（429）」 | 一般第二天恢复；或者换一家，或者改用本机 Claude Code / Codex 订阅 |
+| 代刷 / 同步一直没出结果 | 看一眼弹出的浏览器窗口：可能要拖滑块验证或扫码。程序会每 5 秒看一次，完成后自动接着做 |
+| 小红书提示「冷却中」 | 被限流了，程序自动歇一会儿（重启也记得）。可以在「设置 → 小红书防封号」调慢一点 |
+| 「没找到 XHS-Downloader」 | 小红书下载要用它，按「[一、安装](#一安装只需要一次)」第 4 步装到 `tools/XHS-Downloader` |
 
-每条失败的内容下面都会写「怎么办」。还是不行的话，在「添加与处理」页点「一键复制日志」，开 Issue 时贴上。
+每条失败的内容下面都会写原因。还不行的话，在「添加与处理」页点「一键复制日志」，开 Issue 时贴上。
 
 ### Quick start (English)
 
-**Before you start**
-
-1. **You need a computer** (Windows or Mac). Your phone is only used to copy links in the Douyin app.
-2. **It can be free.** Use a free AI plan (Zhipu GLM or SiliconFlow in China, Gemini elsewhere) on your own account's free quota.
-3. **No coding.** Windows has a one-click installer; Mac runs one install script.
-4. **Your data stays on your computer.** Only text is sent to the AI provider you choose.
-
-**Get going in about 10 minutes**
-
-1. **Install.** Windows: download `DouyinFavStudy-Setup-<version>.exe` from the [latest release](https://github.com/yuanshengbo8-sketch/douyin-fav-study/releases/latest) and double-click it (no Python needed). Mac: install [Python 3.12](https://www.python.org/downloads/) (not 3.13+), download this repo as a ZIP, unzip it, then right-click `install_mac.command` → Open.
-2. **Launch.** Open "收藏学习台" from the desktop (Mac: double-click `start_mac.command`). Keep the black console window open; closing it quits the app. Your browser opens the app automatically.
-3. **Follow the "开始使用" (Getting started) page.** It opens on first launch and ticks off four steps:
-   - ① **Set up AI:** pick a free plan, sign up on the provider's site, create and copy an API key, paste it back and click "一键配置" (auto setup).
-   - ② **Pick what you save:** AI, money, fitness, English, career, cooking, or "什么都学" (no filtering). The default keeps only AI content, so pick yours.
-   - ③ **Add your first video:** in the Douyin app tap Share → Copy link, send it to yourself (for example WeChat "File Transfer"), then paste it on the computer. Try 1 to 3 first; sync your whole favorites list later.
-   - ④ **Open your first note** when the progress bar finishes. The first run downloads a speech model (hundreds of MB), so it is slower once.
-
-**If you get stuck:** every failed item now shows a plain "怎么办" (what to do) line. The common ones: an invalid key (401) means the key was not copied in full; "can't reach the AI" in mainland China means switching to a domestic provider; 429 means today's free quota ran out; if favorites sync stops working after a Douyin website change, paste share links instead, which works the same.
-
-下面是完整的使用说明。
+1. **Get the code**: Code → Download ZIP, or `git clone https://github.com/shawnwang-sg/douyin-fav-study.git`.
+2. **Install**: install [Python 3.12](https://www.python.org/downloads/) (not 3.13+), then double-click `install_windows.bat` (Windows) or right-click `install_mac.command` → Open (Mac).
+3. **Launch**: `start_windows.bat` / `start_mac.command`. Keep the console window open; the app opens at `http://127.0.0.1:8765`.
+4. **Follow the "开始使用" (Getting started) page**: set up an AI provider (a free plan, an API key, or your local Claude Code / Codex subscription), pick what you save, paste a first share link, and open your first article. Switch the sync card to 小红书 (Xiaohongshu) to sync favorites from there too.
+5. **For Xiaohongshu downloads**, install [XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) into `tools/XHS-Downloader` (`git clone`, then `uv sync` inside it).
 
 ---
 
 ## 一、安装（只需要一次）
 
-> **用 Windows 安装包的，双击安装就已经装好了，跳过这一节，直接看「二、启动」。** 下面是 Mac 和脚本安装的步骤。
+### 1. Python 3.12
 
-### 1. 先装 Python
+到 <https://www.python.org/downloads/> 下载 **Python 3.12**（3.11 也行）。**别用 3.13 或更新的**，语音识别组件还不支持。Windows 安装时勾选 **「Add python.exe to PATH」**。
 
-到 https://www.python.org/downloads/ 下载 **Python 3.12**（3.11 也可以）。
-
-> ⚠️ 官网首页默认推荐的是最新版（3.13 或更高），**不要用它**：语音识别等组件还没有支持新版本，会装不上。在下载页往下翻到「Looking for a specific release?」，选 3.12.x。已经装了新版本也没关系，不用卸载，再装一个 3.12 就行，安装脚本会自动选 3.12。
-
-- **Windows**：安装时一定要勾选下方的 **「Add python.exe to PATH」**
-- **Mac**：下载 macOS 安装包，一路下一步即可
-
-### 2. 运行安装脚本
+### 2. 安装脚本
 
 | 系统 | 操作 |
 |---|---|
 | Windows | 双击 `install_windows.bat` |
-| Mac | 右键 `install_mac.command` → 打开（第一次需要右键打开，绕过"无法验证开发者"提示）|
+| Mac | 右键 `install_mac.command` → 打开（第一次要右键打开） |
 
-会自动安装需要的组件，大约几分钟。先从官方源下载，失败时自动换清华镜像。
-
-> Mac 如果提示"没有权限"，打开「终端」，输入 `bash ` （后面有空格），把 `install_mac.command` 拖进终端窗口，回车即可。
+会在程序目录里建一个 `.venv`，装好需要的组件（官方源失败会自动换清华镜像）。
 
 ### 3. 浏览器
 
-程序会用你电脑上已有的 **Edge 或 Chrome** 打开抖音（Windows 自带 Edge）。都没有的话，安装脚本会自动下载一个。
+抖音、小红书都用你电脑上的 **Edge 或 Chrome** 打开（只用来登录、读收藏列表和搜索）。都没有的话安装脚本会下载一个。
+
+### 4. 小红书下载器（要下载小红书才需要）
+
+小红书视频用开源的 [XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) 下载（选最低画质，省空间）。装在程序目录的 `tools/` 下：
+
+```bash
+git clone https://github.com/JoeanAmier/XHS-Downloader.git tools/XHS-Downloader
+cd tools/XHS-Downloader
+uv sync
+```
+
+放在别处也行：在 `data/settings.json` 里加 `"xhs_downloader_dir": "它的路径"`，或者设环境变量 `XHS_DOWNLOADER_DIR`。
 
 ---
 
 ## 二、启动
 
-| 怎么装的 | 怎么打开 |
+| 系统 | 操作 |
 |---|---|
-| Windows 安装包 | 开始菜单或桌面上的「收藏学习台」 |
-| Windows 脚本 | 双击 `start_windows.bat` |
+| Windows | 双击 `start_windows.bat` |
 | Mac | 双击 `start_mac.command` |
+| 命令行 | `.venv` 里的 Python 运行 `python -X utf8 -m app`（`--port 8770` 换端口，`--no-browser` 不自动打开网页） |
 
-会弹出一个黑色命令行窗口（**别关它，关掉程序就退出了**），浏览器会自动打开 `http://127.0.0.1:8765`。
+黑色窗口就是程序本身，**关掉它程序就退出了**。网页地址是 `http://127.0.0.1:8765`。
 
 ---
 
 ## 三、第一次使用
 
-> 第一次打开会进入左侧的「开始使用」页，下面这些步骤在那一页上都能直接做完，做完一步自动打勾。全部完成或点「关掉新手引导」后，这一页就会收起来。
-
 ### 1. 配置 AI（设置页）
 
-**不想花钱：用「免费方案」**。设置页最上面选一家（国内推荐智谱 GLM 或硅基流动，海外可选 Gemini），按三步操作：注册 → 创建 API Key 并复制 → 粘贴后点「一键配置」。程序会自动测试，并挑一个能用的免费模型。用的是你自己账号的免费额度，不花钱。免费额度用完时会提示你；额度一般按天或按月恢复。
+| 方式 | 说明 |
+|---|---|
+| 免费方案 | 智谱 GLM、硅基流动（国内）或 Gemini（海外）：注册 → 创建 API Key → 粘贴后点「一键配置」 |
+| 本机订阅 | 电脑上已经登录了 Claude Code 或 Codex 命令行：选「Claude Code（本机订阅，免 Key）」或 Codex，不用填 Key |
+| 付费模型 | DeepSeek、Kimi、通义、OpenAI、Claude 或任何 OpenAI 兼容接口，自己填 Key 和模型 |
 
-**想要更好的效果：自己选付费模型**，在下面的「AI 提炼」里设置。
+润色排版用的是「保留原话」规则：只改错字、删口水词、补标点、分段，不改写、不总结；改动比例可以在「设置 → 润色排版」调。小红书的防封号节奏在「设置 → 小红书防封号」调。
 
-选一个 AI 服务商，填入 API Key，点「测试连接」。推荐 **DeepSeek**：便宜，中文好，处理一条视频大约几分钱甚至更少。
+<img src="docs/screenshots/settings.png" alt="设置：小红书防封号、润色排版" width="720">
 
-支持：Claude（Anthropic）、DeepSeek、Kimi、通义千问、智谱 GLM、硅基流动、OpenAI，以及任何 OpenAI 兼容接口（选"自定义"）。
+### 2. 登录抖音、小红书
 
-> 不填 Key 也能用，但只能转成文字，生成不了学习笔记。之后填上 Key，在「添加与处理 → 待提炼」里点「全部提炼」即可补上。
+第一次同步时会弹出浏览器窗口，用 App 扫码登录一次，之后一直保持。每周整理、代刷开始前会先检查登录：过期了就弹出登录窗口，扫完点「我登好了」再查；有一个平台登不上，也可以只整理已经登录的。
 
-### 2. 设置关注主题（可选）
+### 3. 添加收藏
 
-默认关注 **AI 相关干货**。和主题无关的视频会被自动收起（在「主题无关」里可以找回）。想学理财、健身、英语，直接改这一栏就行。
-
-### 3. 添加视频（三种方式）
-
-**方式一：粘贴分享链接**（最稳定，推荐）
-抖音里打开视频 → 分享 → 复制链接，粘贴进来。可以一次粘贴很多条。
-
-**方式二：同步整个收藏夹**
-「添加与处理」页 → 同步抖音收藏夹 → 开始同步。
-第一次会弹出浏览器窗口，用抖音 App 扫码登录（只需一次）。程序会慢慢往下滚动读取列表，**过程中请不要关闭这个窗口**。可以选「我的收藏」或「我的喜欢」，也可以限制最多读取多少条，建议第一次先读 20 条试试。
-
-**方式三：导入本地视频**（备用）
-链接解析不了时，可以先把视频保存到手机或电脑，放进「收件箱」文件夹，再点「扫描并处理」。
-
-处理每条视频时，「添加与处理」页会显示进度条：当前在哪一步、百分比、这一条还剩多久、整批还剩多久。剩余时间按你电脑的实际速度估算，处理几条之后会越来越准。
-
-### 4. 转文字的速度
-
-- **视频自带字幕**：直接用字幕，不用下载也不用转写，几秒就好。
-- **苹果芯片 Mac（M1/M2/M3/M4）**：自动用 Mac 加速版（mlx-whisper large-v3-turbo）。第一次会下载约 1.6GB 模型，之后 1 分钟的视频通常几秒到十几秒就能转完。
-- **Windows / Intel Mac**：用通用版（faster-whisper small）。第一次下载约 480MB，1 分钟的视频大约 20 到 60 秒。
-- 人在中国大陆时，在设置里勾选「使用国内镜像下载模型」；在海外不要勾。
+| 方式 | 适合 |
+|---|---|
+| 粘贴分享链接 | 抖音、小红书「分享 → 复制链接」，一次可以贴很多条，两个平台混在一起也行 |
+| 同步收藏 | 「添加与处理」顶部切到抖音或小红书，读「我的收藏」或某个收藏夹 / 专辑 |
+| 每周整理 | 「每周周报」里点「开始整理」：读两个平台最新的收藏，碰到连续 20 条已经有的就停 |
+| 按月整理 | 把最近 30 天的收藏完整过一遍（抖音按真实收藏时间；小红书接口不给收藏时间，按程序第一次看到的时间） |
+| 导入本地视频 | 已经下载到电脑上的视频 / 图文文件夹，直接转写，不重新下载 |
 
 ---
 
 ## 四、学习
 
-- **学习库**：所有笔记按分类展示，可以搜索，可以筛选待学 / 已学 / 星标
-- **笔记页**：一句话总结、核心观点、照着做的步骤、提到的工具、关键概念、自测题、原文转录
-- **标记已学会**：首页的学习进度条会随之更新
-- **我的笔记**：写下自己的理解和实践结果，会自动保存，也会同步写进 MD 文件
-- **随机学一条**：从还没学的笔记里随机抽一条
-- **导出 PDF**：单条或整个列表都可以导出；在打印窗口里选择「另存为 PDF」
-- **下载 MD / 在文件夹中显示**：笔记都保存在 `data/知识库/分类/标题.md`，可以把这个文件夹直接当 Obsidian 库打开
+### 学习库（阅读版）
 
+- 按「分类 tab → 大类 → 小主题」排好的文章，左边是可以折叠的目录，右下角「本章节最上 / 最上」
+- 每篇文章：主题、金句、正文（保留原话），「原视频」弹窗播放本地视频；每个分类、大类、小主题都能连播 / 洗牌
+- 特殊的 5 个 tab：**精品**、**专题整理**（最前），**待处理清单**、**回收站**、**质检**（最后）
 
-### 图文也能学
+### 划线和笔记
 
-收藏夹里的**图文笔记**也会一起进学习台：程序会下载所有图片，用本机的文字识别把图上的字认出来（Mac 用苹果系统自带的识别引擎，Windows 用 RapidOCR，都在本机运行，图片不上传），和正文合在一起交给 AI 提炼，后面的分类、精读、测验和视频完全一样。
+选中一段文字，弹出小工具条：
 
-- 详情页能看原图，点图片放大，左右键翻页；「原图与文字」标签里每张图和识别出的文字并排对照
-- 图片保存在笔记目录的 `_图片/` 文件夹，MD 笔记里直接嵌入原图，Obsidian 打开就能看到
-- 纯图片、没有文字的图文（摄影、表情包）会自动跳过
-- **老用户需要重新运行一次安装脚本**，才会装上文字识别组件
+| 按钮 | 做什么 |
+|---|---|
+| 一键三连 | 复制 + 高亮 + 加入专题笔记 |
+| 高亮 | 划线保存，刷新后还在；点高亮可以取消 |
+| 复制 | 复制到剪贴板 |
+| 加入专题笔记 | 在专题里就加进当前专题；不在就弹框选专题。摘抄按出处归在一起 |
 
-### 带我精读（有人带着读）
+### 精品
 
-每条笔记页里有「带我精读」标签，长视频（两小时以上也行）同样适用。AI 会像老师一样带你读：
+点文章标题前的 ☆，变成 ★，复制一份到「精品」tab，按原来的分类排目录。
 
-- **5 句核心结论** → **思维导图** → **章节大纲**（带时间戳，点击跳到文字稿对应位置）→ **关键概念和术语解释**
-- **你真的懂了吗？** 不直接给答案，用问题检查你；你写下回答，AI 点评并继续追问
-- **10 道测验题**（点选作答，马上判对错）
-- **Anki 卡片**：下载 `.txt`，在 Anki 里「文件 → 导入」，分隔符选 Tab
-- 思维导图用 Markmap，可缩放折叠，可下载成网页
-- **问老师**：随时追问没看懂的地方
-- **复制提示词+文稿**：一键复制，粘贴到豆包 / Kimi / 千问 / Claude 网页版也能用
+### 专题整理
 
-文稿太长时，会先分段做详细笔记，最后合并再精读，避免超出模型上下文长度。精读结果也会写进 MD 笔记。
+- 左边自建分类（最多三级），每个分类下面建专题
+- 在任何文章上点「＋专题」，可以连着选好几条，底部选择条「加入专题…」
+- 专题里集中看、连播；右侧是这个专题的**笔记**，边写边自动保存
+- **复制到桌面**：`桌面\专题学习\一级\二级\三级\专题名\`，视频按顺序编号，笔记存成 `笔记.md`
+- **代刷**：填关键词和数量，用抖音、小红书的搜索各找 N 条学习库里还没有的视频（删过的不会再刷到），插队处理；润色时 AI 顺便判断和专题有没有关系，完全无关的自动拿出专题。代刷来的统一放在回收站（按原分类排好），只在专题里看，不混进你自己的收藏；在回收站点「恢复」才进收藏
 
-**精读可以用更强的模型**：设置 → 精读，取消「和 AI 提炼用同一个模型」，就能单独选 Claude 等。日常批量提炼用便宜的 DeepSeek，精读用 Claude，比较省钱。
+### 其他
 
-### 知识网络：图谱和共识观点
-
-收藏多了，很多视频其实在讲同一件事。左侧「知识网络」把笔记放在一起看：
-
-- **图谱**：两条笔记有共同的标签、概念或工具，就连一条线，共同的越多线越粗。点一个圆点，会高亮和它有关的笔记，右边列出它们共同提到了什么；双击打开笔记。在本机计算，不花钱
-- **共识观点**：选一个分类点「整理共识」，AI 会把这个分类的笔记放在一起读，找出**被两条以上视频互相印证的观点**（每条都标出是哪几条视频说的，点一下跳过去），以及**说法不一致的地方**和怎么看待。每个分类调用一次 AI，用「设置 → 精读」里的模型
-- 整理好的共识观点会以菱形出现在图谱里，连着支持它的笔记；也会保存成 Markdown，放在笔记文件夹的 `_共识观点/` 里，Obsidian 里能点链接跳回原笔记
-- 分类里加了新笔记，卡片上会提示「新增 N 条笔记」，再整理一次就行
-
-### 每周周报
-
-左侧「每周周报」统计这一周（周一到周日）：新增几条笔记、学会几条、精读几条、测验正确率、回答检查题和问老师的次数、AI 用了多少 tokens，新笔记都在学哪些分类、高频关键词，以及「接下来先学这几条」。
-
-- **连续学习周数**：每周至少学一次（标记学会、精读、做测验、回答检查题都算）就加一周
-- 新的一周开始后，学习库顶部会提示「上周的学习周报出来了」
-- 可以翻看以前的周，也可以「保存为 Markdown」到笔记文件夹的 `_周报/` 里
-- 全部在本机统计，不调用 AI
+- **每周周报**：这一周新收藏、学会、精读、测验，连续学习几周
+- **知识网络**、**带我精读**：有共同关键词的笔记连成图；单条笔记可以让 AI 带着精读、出题
 
 ---
 
-## 五、自动跳过和防出错机制
+## 五、自动跳过和防封号
 
-| 情况 | 处理方式 |
+| 情况 | 怎么处理 |
 |---|---|
-| 广告视频、图文笔记 | 读取信息时直接跳过，不下载 |
-| 纯音乐、无对白、只有一两句歌词 | 转文字后发现内容太少，跳过，不浪费 AI 费用 |
-| 带货、短剧、唱歌跳舞、闲聊 | AI 判断没有实质内容，跳过 |
-| 和关注主题无关 | 收进「主题无关」，觉得有用可以一键收回学习库 |
-| 同一个视频添加两次 | 自动去重 |
-| 下载或网络出错 | 30 秒后自动重试一次，仍失败就放进「失败」，可以手动重试 |
-| AI Key 错误、余额不足 | 直接提示原因，不会反复重试扣费 |
-| 超长视频 | 只转录前 15 分钟（可在设置中修改）|
-| 程序中途被关掉 | 下次启动时，处理到一半的视频会自动回到队列 |
+| 超过 15 分钟的长视频 | 先跳过，文件留着；在「已跳过」里点「加入整理」会整条转写 |
+| 没说话（纯音乐、画面为主） | 跳过；点「加入整理」也能收进学习库，看原视频 |
+| 转写太乱、残缺、没信息量 | 单独列出，按原因分组；可以整组加入整理或整组删除 |
+| 视频已删除 / 设为私密 | 读几次都读不到就挪到「已跳过」 |
+| AI 输出格式不对 | 自动告诉 AI 哪里错、让它重输一次 |
+
+<img src="docs/screenshots/skipped.png" alt="已跳过：按原因分组" width="720">
+
+**防封号**：下载、读详情一律一条一条来；小红书每条之间随机歇几秒，每天有上限，被限流或要验证就自动冷却（重启也记得）；登录用的浏览器窗口不反复开关、不反复刷新。
+
+**中途关了程序**：每周 / 按月整理、代刷要处理的条目都记在 `data/` 里，下次启动自动接着做。
 
 ---
 
 ## 六、常见问题
 
-**同步收藏夹时没反应 / 读不到？**
-看一眼弹出的浏览器窗口：抖音可能弹了滑块验证码，手动完成后重新点同步即可。也可能是登录过期了，点「只登录抖音」重新扫码。
-如果都不是，多半是抖音改版了：程序会自动换备用方式读取；还是不行就先用「粘贴链接」添加（这个方式不受影响），再到「设置 → 版本与更新」看看有没有修好的新版本。
+**收藏的视频存在哪？** 默认在程序目录的 `视频库/抖音`、`视频库/小红书`，按收藏夹分类分文件夹，文件名是「作者 - 标题」。可以在设置里改到别的盘。
 
-**某条一直失败？**
-可能视频被删除或设为私密。也可以把视频下载下来，用「导入本地视频」处理。
+**删除和彻底删除有什么区别？** 删除是放进学习库的回收站，可以恢复；彻底删除会删掉记录、笔记、高亮和专题里的位置（视频文件不动），元信息留底，以后代刷不会再刷到它，同步收藏、手动添加仍可以加回来。
 
-**能处理多快？会被封号吗？**
-程序会模拟正常浏览速度（滚动和下载之间都有间隔），只读取你自己账号的收藏。不过任何自动化操作都有被平台限制的可能，**建议一次不要处理太多（比如几十条）**，分几天慢慢处理。
+**同一个视频会不会重复？** 不会。每条收藏有一个 uid（`dy:作品ID`、`xhs:笔记ID`，本地文件用文件指纹），数据库里唯一。
 
-**想换一台电脑？**
-用「设置 → 备份与恢复」：
-1. 旧电脑上点「下载完整备份」，得到一个 `收藏学习台备份-日期.zip`（包含笔记、文字稿、精读、学习进度、设置）。
-2. 新电脑上装好学习台（Windows 用安装包，Mac 运行安装脚本），打开「设置 → 恢复备份…」，选这个 zip，确认后就恢复原样。
-3. 抖音登录状态不在备份里，新电脑上重新扫码；语音模型会自动重新下载。
+**能换数据目录吗？** 设环境变量 `FAVSTUDY_DATA` 就能把 `data/` 放到任何地方（比如跑一份演示数据）。
 
-恢复会覆盖当前数据，但恢复前程序会先把当前数据自动备份到 `data/backups/`（保留最近 5 个），在同一个页面可以一键撤销。
-备份里如果包含 AI Key，请像密码一样保管。平时也建议隔一段时间下载一次备份，放到 iCloud 云盘或网盘里。
+**和原项目有什么不同？** 这是 [yuanshengbo8-sketch/douyin-fav-study](https://github.com/yuanshengbo8-sketch/douyin-fav-study) 的分支：加了小红书、阅读版学习库、专题整理、代刷、精品、划线笔记、每周 / 按月整理和防封号。原项目的 Windows 安装包不含这些功能，请用上面的脚本安装。
 
-**怎么彻底删除？**
-- 安装包版：在 Windows「设置 → 应用」里卸载「收藏学习台」，卸载时会问要不要一起删掉笔记和设置
-- 脚本版：直接删除整个文件夹。删除前记得备份 `data/知识库`，里面是你的笔记
+---
+
+## 演示数据 · Demo data
+
+```bash
+python scripts/make_demo.py demo_data
+```
+
+然后用这份数据启动（不碰你自己的数据）：
+
+| 系统 | 命令 |
+|---|---|
+| Windows（PowerShell） | `$env:FAVSTUDY_DATA="demo_data"; .venv\Scripts\python -X utf8 -m app --port 8770` |
+| Mac / Linux | `FAVSTUDY_DATA=demo_data .venv/bin/python -m app --port 8770` |
+
+里面有 6 篇示例文章、4 条已跳过、一个「武术 › 太极 › 太极猫步」专题（带笔记、精品和高亮）。文章是编的，「原视频」放不出来。
 
 ---
 
 ## 文件结构
 
 ```
-app/            程序代码（Python 后端 + 网页界面）
-installer/      Windows 安装包的打包脚本（见下面「自己打包安装包」）
-data/           你的数据（首次运行自动创建）
-  知识库/        Markdown 笔记（可以用 Obsidian 打开）
-    _共识观点/    每个分类整理出的共识观点
-    _周报/        保存下来的学习周报
-  inbox/        收件箱：放入本地视频
-  library.db    处理进度和学习记录
-  settings.json 设置（包括你的 AI Key）
-  browser/      抖音登录状态
-  models/       语音识别模型
+douyin-fav-study/
+├─ app/                    程序代码
+│  ├─ server.py            本地网页服务（http://127.0.0.1:8765）
+│  ├─ worker.py            后台任务：同步、下载、转写、润色、每周整理、代刷
+│  ├─ douyin.py / xhs.py   抖音、小红书：登录、收藏列表、搜索、读详情
+│  ├─ xhs_bridge.py        调 XHS-Downloader（最低画质）
+│  ├─ transcribe.py        本机语音转文字（faster-whisper / mlx-whisper）
+│  ├─ yuedu.py             保留原话的润色排版、分类表
+│  ├─ reader_*.py          学习库阅读版、专题整理、精品、划线
+│  ├─ topics.py            专题、专题笔记、高亮、复制到桌面
+│  ├─ db.py                SQLite（uid 去重）
+│  └─ static/              主程序网页
+├─ data/                   你的数据（不会上传）：数据库、笔记、设置、登录状态、模型
+├─ 视频库/                  本地视频库（不会上传）
+│  ├─ 抖音/                 按收藏夹分类分文件夹
+│  └─ 小红书/
+├─ tools/                  外部工具（不会上传）：XHS-Downloader
+├─ scripts/make_demo.py    生成演示数据
+├─ installer/              Windows 安装包脚本和图标
+└─ docs/                   logo 和截图
 ```
 
-**注意：** `data/settings.json` 里存着你的 AI Key，`data/browser/` 里存着你的抖音登录状态。如果要把这个软件分享给别人，**一定要先删掉 `data` 文件夹**。
-
-用安装包装的版本，程序和 `data` 都在 `%LOCALAPPDATA%\Programs\DouyinFavStudy\`。卸载时会问要不要一起删掉数据，默认保留。
-
-### 自己打包安装包
-
-装好 [Inno Setup 6](https://jrsoftware.org/isdl.php)，在仓库根目录运行
-
-```
-powershell -ExecutionPolicy Bypass -File installer\build_windows.ps1
-```
-
-脚本会下载官方嵌入版 Python 3.12、装好全部组件、编译出 `dist\DouyinFavStudy-Setup-版本号.exe`。国内网络慢可以加 `-PipIndex https://pypi.tuna.tsinghua.edu.cn/simple`。
-
-发布 Release 时，GitHub Actions 会自动打包 Windows 安装包并上传到这个 Release（`.github/workflows/windows-installer.yml`）。要给已经发布的版本补安装包：在 Actions 页面手动运行「Windows 安装包」，填上版本号（例如 `v1.0.7`）。
+`data/`、`视频库/`、`tools/` 都在 `.gitignore` 里。
 
 ---
 
 ## 隐私与安全 · Privacy
 
-- 服务只监听本机 `127.0.0.1`，不对局域网和外网开放
-- `data/` 文件夹里有你的 AI Key 和抖音登录状态，已写进 `.gitignore`。**不要上传、分享或提交这个文件夹**
-- 发给 AI 服务商的只有文字稿和标题，不含视频、音频和图片
-- 启动时会向 GitHub 问一次最新版本号，用来提醒你升级，不上传任何内容；不想要可以在「设置 → 版本与更新」关掉
+- 所有数据都在你自己的电脑上：数据库、笔记、视频、登录状态
+- 发出去的只有：转出来的文字（发给你选的 AI）、抖音 / 小红书本身的网页请求（用你自己的登录，和你手动刷一样）
+- API Key 只存在本机 `data/settings.json`；不用 Key 的本机订阅（Claude Code / Codex）走你电脑上已经登录的命令行
 
 ## 免责声明 · Disclaimer
 
-本项目仅供个人学习和整理**自己收藏**的内容使用。请遵守抖音的用户协议，尊重创作者的版权：生成的笔记只供自己学习，不要批量搬运、二次发布或用于商业用途。本项目与抖音、字节跳动没有任何关系。自动化操作有被平台限制的风险，请适度使用，风险由使用者自行承担。
+本工具只用于整理你自己收藏的内容、个人学习。请遵守抖音、小红书的用户协议和内容版权，不要批量搬运、传播他人作品。下载和搜索都放慢了速度，但账号风控由平台决定，使用风险自负。
 
-This project is for personal study of content you saved yourself. Respect Douyin's Terms of Service and creators' copyright. Not affiliated with Douyin or ByteDance. Use at your own risk.
+## 致谢与许可证 · Credits & License
 
-## 许可证 · License
+- 原项目：[yuanshengbo8-sketch/douyin-fav-study](https://github.com/yuanshengbo8-sketch/douyin-fav-study)
+- 小红书下载：[JoeanAmier/XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader)
+- 语音识别：[faster-whisper](https://github.com/SYSTRAN/faster-whisper)、[mlx-whisper](https://github.com/ml-explore/mlx-examples)
 
-[PolyForm Noncommercial 1.0.0](LICENSE.md)：可以免费使用、修改和分享，**但不能用于商业用途**。个人、学生、研究、公益和教育机构使用都没问题。如需商用授权，请开 Issue 联系。
+许可证：[PolyForm Noncommercial 1.0.0](LICENSE.md)，只允许非商业使用。
 
-Free for personal, research, educational and other noncommercial use. Commercial use requires separate permission. Note: this is a source-available license, not an OSI-approved open-source license.
-
-更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+Required Notice: Copyright (c) 2026 yuanshengbo8-sketch (https://github.com/yuanshengbo8-sketch/douyin-fav-study)

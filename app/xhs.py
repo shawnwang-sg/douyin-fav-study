@@ -35,7 +35,10 @@ ID_PATTERNS = [
     re.compile(r"/user/profile/[0-9a-f]{24}/" + NOTE_ID),
     re.compile(r"[?&]noteId=" + NOTE_ID),
 ]
-XHS_DIR = Path(os.environ.get("XHS_DOWNLOADER_DIR") or Path.home() / "XHS-Downloader")
+# XHS-Downloader 放在哪：环境变量 XHS_DOWNLOADER_DIR > 设置 xhs_downloader_dir > 程序目录\tools\XHS-Downloader > 用户目录\XHS-Downloader
+XHS_DIR = Path(os.environ.get("XHS_DOWNLOADER_DIR") or config.load().get("xhs_downloader_dir")
+               or next((p for p in (config.TOOLS_DIR / "XHS-Downloader",) if p.exists()), None)
+               or Path.home() / "XHS-Downloader")
 COOKIE_PATH = DATA / "xhs_cookie.txt"   # 登录后存一份 xiaohongshu.com 的 Cookie 给 XHS-Downloader 用
 
 _URLS = {}  # 笔记 ID → 带 xsec_token 的完整链接（收藏列表里拿到的；没有 token 有些笔记打不开）
