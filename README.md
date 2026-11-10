@@ -253,7 +253,7 @@ python scripts/make_demo.py demo_data
 | Windows（PowerShell） | `$env:FAVSTUDY_DATA="demo_data"; .venv\Scripts\python -X utf8 -m app --port 8770` |
 | Mac / Linux | `FAVSTUDY_DATA=demo_data .venv/bin/python -m app --port 8770` |
 
-里面有 6 篇示例文章、4 条已跳过、一个「武术 › 太极 › 太极猫步」专题（带笔记、精品和高亮）。文章是编的，「原视频」放不出来。
+里面有 6 篇示例文章、4 条已跳过、一个「网球 › 基本功 › 正手和发球」专题（带笔记、精品和高亮）。文章是编的，「原视频」放不出来。
 
 ---
 
