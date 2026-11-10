@@ -49,6 +49,16 @@ def engine_status():
     return {"apple_silicon": is_apple_silicon(), "mlx_available": mlx_available()}
 
 
+def media_duration(path):
+    """音视频时长（秒）；读不出来返回 None。"""
+    import av
+    try:
+        with av.open(str(path)) as c:
+            return c.duration / 1_000_000 if c.duration else None
+    except Exception:
+        return None
+
+
 def has_audio(path) -> bool:
     import av
     try:
@@ -115,25 +125,39 @@ def _setup_hf(use_mirror):
         os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 
-def _faster_model(size, log):
+def _faster_model(size, log, workers=1):
+    """workers > 1：CTranslate2 开多个工作实例，多个线程同时调 transcribe() 才能真正并行；
+    CPU 线程按核数平分（每路至少 2 个）。"""
     global _model, _model_key
+    workers = max(1, int(workers or 1))
     with _lock:
-        key = ("faster", size)
+        key = ("faster", size, workers)
         if _model is not None and _model_key == key:
             return _model
         from faster_whisper import WhisperModel
-        log(f"加载语音识别模型 faster-whisper {size}（第一次会自动下载，small 约 480MB）……")
-        _model = WhisperModel(size, device="cpu", compute_type="int8", download_root=str(MODELS_DIR))
+        threads = max(2, (os.cpu_count() or 4) // workers)
+        log(f"加载语音识别模型 faster-whisper {size}（{workers} 路并行，每路 {threads} 线程；第一次会自动下载，small 约 480MB）……")
+        _model = WhisperModel(size, device="cpu", compute_type="int8", download_root=str(MODELS_DIR),
+                              cpu_threads=threads, num_workers=workers)
         _model_key = key
         log("语音识别模型已就绪。")
         return _model
 
 
-def _run_faster(audio, size, log, should_stop, on_progress):
-    model = _faster_model(size, log)
+def _run_faster(audio, size, log, should_stop, on_progress, workers=1):
+    model = _faster_model(size, log, workers)
     total = len(audio) / SR
-    segments, info = model.transcribe(audio, language="zh", beam_size=5, vad_filter=True,
-                                      initial_prompt=PROMPT)
+    # 先认语言：英文视频按英文转（以前固定按中文，英文会被转成中文乱码）；其他情况照旧按普通话
+    lang, prompt = "zh", PROMPT
+    try:
+        det, prob, _ = model.detect_language(audio, vad_filter=True, language_detection_segments=3)
+        if det == "en" and prob >= 0.6:
+            lang, prompt = "en", None
+            log(f"识别为英文视频（把握 {prob:.0%}），按英文转写")
+    except Exception as e:
+        log(f"语言识别出错（{str(e)[:80]}），按中文转写")
+    segments, info = model.transcribe(audio, language=lang, beam_size=5, vad_filter=True,
+                                      initial_prompt=prompt)
     segs = []
     for s in segments:  # 生成器：边识别边返回，正好用来报进度
         if should_stop():
@@ -205,7 +229,7 @@ def _run_mlx(audio, repo, log, on_progress):
 
 def transcribe(path, *, engine="auto", mlx_model="mlx-community/whisper-large-v3-turbo", size="small",
                use_mirror=False, max_minutes=15, log=print, should_stop=lambda: False,
-               on_progress=lambda f: None):
+               on_progress=lambda f: None, workers=1):
     """返回 {"text", "segments", "duration", "engine"}。"""
     _setup_hf(use_mirror)
     audio = load_audio(path, max_minutes * 60 if max_minutes else None)
@@ -220,7 +244,7 @@ def transcribe(path, *, engine="auto", mlx_model="mlx-community/whisper-large-v3
             log(f"Mac 加速引擎出错（{str(e)[:120]}），改用通用引擎重试……")
             eng = "faster"
     if eng == "faster":
-        segs = _run_faster(audio, size, log, should_stop, on_progress)
+        segs = _run_faster(audio, size, log, should_stop, on_progress, workers)
 
     segs = [{"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"].strip()}
             for s in segs if s["text"].strip()]

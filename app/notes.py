@@ -34,7 +34,7 @@ def render(item: dict, md_dir: Path = None) -> str:
         f"category: {n.get('category') or '未分类'}",
         f"difficulty: {n.get('difficulty') or ''}",
         f"date: {time.strftime('%Y-%m-%d')}",
-        "tags: [" + ", ".join(["抖音"] + (["图文"] if item.get("media_type") == "note" else [])
+        "tags: [" + ", ".join([{"xhs": "小红书"}.get(item.get("platform"), "抖音")] + (["图文"] if item.get("media_type") == "note" else [])
                               + [t.replace(",", " ") for t in n.get("tags", [])]) + "]",
         "---",
         "",
@@ -58,6 +58,11 @@ def render(item: dict, md_dir: Path = None) -> str:
         if body:
             lines.extend([f"## {name}", "", *body, ""])
 
+    if n.get("mode") == "yuedu":  # 新版：保留原话的阅读稿
+        if n.get("gold"):
+            lines += [f"> {n['gold']}", ""]
+        lines += [n.get("body") or "", ""]
+        n = {}
     section("一句话总结", [n.get("summary", "")] if n.get("summary") else [])
     if item.get("images"):
         lib = library_dir()
@@ -115,7 +120,7 @@ def write(item: dict) -> str:
     """写入（或覆盖）笔记文件，返回文件路径。"""
     n = item.get("note") or {}
     root = library_dir()
-    folder = root / safe_name(n.get("category") or "未分类", 20)
+    folder = root / safe_name((n.get("tab") if n.get("mode") == "yuedu" else n.get("category")) or "未分类", 20)
     folder.mkdir(parents=True, exist_ok=True)
     base = safe_name(n.get("title") or item.get("title") or f"视频{item['id']}")
     path = folder / f"{base}.md"

@@ -25,6 +25,57 @@ Turn your saved Douyin videos &amp; image posts into local study notes you can l
 
 > Everything runs locally on your own machine: your own Douyin login, your own AI key of choice (Claude, DeepSeek, Kimi, Qwen, GLM, SiliconFlow, OpenAI, Gemini or any OpenAI-compatible API, including free tiers). Notes are plain Markdown files. The UI is in Chinese.
 
+## 这个分支新增了什么 · What's new in this fork
+
+这是 [yuanshengbo8-sketch/douyin-fav-study](https://github.com/yuanshengbo8-sketch/douyin-fav-study) 的分支，在原版基础上加了小红书、阅读版学习库和专题学习。下面的截图都是演示数据（`scripts/make_demo.py` 生成），不含任何个人收藏。
+
+> 页面上方的「下载 Windows 安装包」是原项目的安装包，不含本分支的功能。要用本分支，请 `git clone` 本仓库，再按下面「快速开始」用安装脚本安装。
+
+This fork adds Xiaohongshu (RedNote) support, a reading-style library, and topic-based study on top of the original project. Screenshots below use demo data only.
+
+**抖音 + 小红书合一**
+
+- 收藏同步、链接添加、下载都支持抖音和小红书；小红书优先用 XHS-Downloader（最低画质、带音轨），失败了才用登录的浏览器窗口
+- 防封号：所有下载一条一条来；小红书有冷却、每日上限、随机间隔；浏览器窗口不反复开关、不反复刷新
+- 整理前先检查登录：过期就弹出登录窗口，点「我登好了」再查；分得清 xiaohongshu.com 和海外网络跳去的 rednote.com（两边登录不通用）；有一个平台登不上也可以只整理已登录的
+- 每个条目有唯一的 uid（`dy:作品ID` / `xhs:笔记ID` / `file:本地文件指纹`），数据库唯一索引去重
+- 每周整理：读到连续 20 条已有的就停；按月整理：抖音按接口里的真实收藏时间读满 30 天；整理中途可以停止，重启后接着做
+
+**学习库 = 阅读版**（[video-yuedu](https://github.com/shawnwang-sg/agent-skills) 的版面）
+
+- 转写稿按「保留原话」规则润色：改错字、去口水词、分段排版，逐字改动不超过 15%，超了自动让 AI 改回原话
+- 按「分类 → 大类 → 小主题」排目录，侧边导航，原视频弹窗播放，连播 / 洗牌
+- 选中文字：**一键三连**（复制 + 高亮 + 加入专题笔记）、高亮、复制；高亮会保存
+- ★ **精品**：点亮文章标题前的星，复制一份到「精品」tab，保留原分类作目录
+- 回收站：删除可恢复，也可以「彻底删除」（元信息留底）；已跳过的条目按原因分组，可以整组加入整理
+
+![阅读版学习库](docs/screenshots/reader.png)
+
+**专题整理：集中学习的地方**
+
+- 自己建三级分类，每个分类下建专题；在任意文章上点「＋专题」，可以连着选好几条一起加进去
+- 专题里集中看、连播；右侧是随手记的**专题笔记**，自动保存；摘抄按出处归在一起
+- **复制到桌面**：按「专题学习 / 一级 / 二级 / 三级 / 专题」建文件夹，视频按顺序编号，笔记存成 `笔记.md`，方便剪辑
+- **代刷**：用抖音、小红书自己的搜索按关键词各找 N 条新视频，插队处理、润色后放进专题；AI 判断和专题完全无关的自动拿出专题。代刷来的统一放进回收站（按原分类排好），不混进你自己的收藏，在回收站点「恢复」才进收藏
+- 页面要验证或登录时，代刷会把浏览器窗口提到前面等你处理，每 5 秒看一次，完成后自动接着搜
+
+<table>
+<tr>
+<td><img src="docs/screenshots/topic.png" alt="专题整理"><br><sub>专题整理：三级分类、专题文章、右侧专题笔记</sub></td>
+<td><img src="docs/screenshots/selection.png" alt="选中文字"><br><sub>选中文字：一键三连 / 高亮 / 复制 / 加入专题笔记</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/feed.png" alt="代刷"><br><sub>代刷：按关键词各找 N 条新视频补进专题</sub></td>
+<td><img src="docs/screenshots/starred.png" alt="精品"><br><sub>精品：保留原分类的目录</sub></td>
+</tr>
+</table>
+
+**其他**
+
+- AI 可以用本机的 Claude Code / Codex 订阅（命令行），不用另外买 API
+- 「添加与处理」页面省资源：处理中 2 秒、空闲 6 秒刷新一次，标签页在后台时不刷新，列表没变就不重画
+- 试用 / 截图用的演示数据：`python scripts/make_demo.py demo_data`，再用 `FAVSTUDY_DATA=demo_data python -m app --port 8770` 启动（Windows PowerShell 写 `$env:FAVSTUDY_DATA="demo_data"`）。环境变量 `FAVSTUDY_DATA` 可以把数据目录放到任何地方
+
 ## 讲解视频 · Video
 
 https://github.com/user-attachments/assets/00f61aff-8f26-4cbc-a444-ab62e3a569c5

@@ -57,6 +57,7 @@ const ACTIVE = ["queued", "fetching", "downloading", "transcribing", "extracting
 let STATE = null;
 let libFilter = { q: "", learned: "", starred: "", category: "" };
 let procTab = "active";
+let procOpen = false;  // 添加与处理页的条目列表：默认收起
 let lastItems = [];
 
 async function api(path, body) {
@@ -94,7 +95,7 @@ async function refreshState() {
   if (parts.length) sf.textContent = parts.join("\n");
   else sf.innerHTML = `就绪 · v${esc(STATE.version || "")}` +
     (up.newer ? ` · <a href="#/settings/update" class="link">有新版本 v${esc(up.latest)}</a>` : "");
-  $("#navCats").innerHTML = (st.categories || []).map((c) =>
+  if ($("#navCats")) $("#navCats").innerHTML = (st.categories || []).map((c) =>
     `<a href="#/library/cat/${encodeURIComponent(c.category || "其他")}" class="${libFilter.category === c.category ? "on" : ""}">
       <i class="dot cat-${catColor(c.category)}"></i>${esc(c.category || "其他")}<span>${c.n}</span></a>`).join("");
   return STATE;
@@ -106,10 +107,12 @@ let lastInsKey = null;
 function startPolling() {
   clearTimeout(pollTimer);
   const tick = async () => {
+    // 标签页在后台（看不见）时不刷新，切回来马上刷一次
+    if (document.hidden) { pollTimer = setTimeout(tick, 5000); return; }
     const before = JSON.stringify(STATE?.stats);
     await refreshState();
     const r = route();
-    if (r.name === "process") renderProcessLive();
+    if (r.name === "process") renderProcessLive({ poll: true });
     else if (r.name === "start" && startKey() !== lastStartKey && !view.contains(document.activeElement?.closest("input, textarea"))) renderStart(true);
     else if (r.name === "library" && JSON.stringify(STATE?.stats) !== before) renderLibrary(true);
     else if (r.name === "item" && curItem) {
@@ -129,9 +132,14 @@ function startPolling() {
       lastInsKey = insKey;
     }
     const active = STATE?.worker?.busy || STATE?.deep?.item_id || STATE?.insights?.pending?.length;
-    pollTimer = setTimeout(tick, active ? 1000 : 2500);
+    // 处理中 2 秒一次（进度条够用），空闲 6 秒一次
+    pollTimer = setTimeout(tick, active ? 2000 : 6000);
   };
   pollTimer = setTimeout(tick, 1000);
+  if (!startPolling.vis) {
+    startPolling.vis = true;
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { clearTimeout(pollTimer); pollTimer = setTimeout(tick, 50); } });
+  }
 }
 
 /* ---------------------------------------------------------------- 路由 */
@@ -151,7 +159,7 @@ async function render() {
   const r = route();
   $$(".nav > a").forEach((a) => a.classList.toggle("on", a.dataset.nav === (r.name === "item" ? "library" : r.name)));
   if (!STATE) await refreshState();
-  if (r.name === "library") { libFilter.category = r.category; await refreshState(); return renderLibrary(); }
+  if (r.name === "library") { location.replace("/reader"); return; }  // 学习库 = 阅读页
   if (r.name === "item") return renderItem(r.id, r.tab);
   if (r.name === "process") return renderProcess();
   if (r.name === "start") return renderStart();
@@ -357,7 +365,7 @@ async function renderItem(id, tab) {
   const isNote = it.media_type === "note";
   const tabs = [["note", "笔记"], ["deep", "带我精读" + (it.deep ? " ✓" : "")], ["text", isNote ? "原图与文字" : "文字稿"]];
   view.innerHTML = `
-    <a class="back" href="javascript:history.length>1?history.back():location.hash='#/library'">← 返回</a>
+    <a class="back" href="javascript:history.length>1?history.back():location.href='/reader'">← 返回</a>
     <div class="detail">
       <article class="note">
         <h1>${esc(n.title || (it.deep || {}).title || it.title || "未命名")}</h1>
@@ -408,7 +416,7 @@ async function renderItem(id, tab) {
   $("#catSel") && ($("#catSel").onchange = async (e) => { await act("category", { value: e.target.value }); toast("分类已修改"); refreshState(); });
   $("#delBtn").onclick = async () => {
     if (!confirm("确定删除这条？对应的 MD 笔记文件也会删除。")) return;
-    await act("delete"); toast("已删除"); location.hash = "#/library";
+    await act("delete"); toast("已删除"); location.href = "/reader";
   };
   let t; $("#myNote").addEventListener("input", (e) => {
     $("#saved").textContent = "编辑中…"; clearTimeout(t);
@@ -656,29 +664,79 @@ $("#addSubmit").onclick = async () => {
   } catch (e) { toast(e.message, 4000); }
 };
 
+let syncPlat = null;  // 同步卡片上选的平台：douyin / xhs
+const PNAME = { douyin: "抖音", xhs: "小红书" };
+function syncKindOptions(s, sel) {
+  sel = sel || s.sync_kind || "collection";
+  const xhs = syncPlat === "xhs";
+  const opt = (v, t) => `<option value="${esc(v)}" ${sel === v ? "selected" : ""}>${esc(t)}</option>`;
+  const folders = (xhs ? s.xhs_folders : s.folders) || [];
+  return opt("collection", "我的收藏（全部）") + opt("like", xhs ? "我赞过的" : "我的喜欢") +
+    (folders.length ? `<optgroup label="${xhs ? "收藏专辑" : "收藏夹分类"}">${folders.map((f) => opt("folder:" + f.id, `${f.name}（${f.count}）`)).join("")}</optgroup>` : "");
+}
+function syncCardHtml(s) {
+  const xhs = syncPlat === "xhs", g = STATE.xhs_guard || {};
+  const folders = (xhs ? s.xhs_folders : s.folders) || [];
+  const guard = xhs ? `<p class="muted small">防封号：一条一条读，每条之间随机歇 ${(s.xhs_delay || [4, 9]).join("～")} 秒，每天最多 ${g.cap || s.xhs_daily_cap} 条（今天已读 ${g.today || 0} 条）${g.cool_left ? `；<b style="color:var(--warn)">冷却中，还剩 ${Math.ceil(g.cool_left / 60)} 分钟（${esc(g.cool_why || "被限流")}）</b>` : ""}。
+      读详情先用 XHS-Downloader，读不到再用免登录的网页解析站兜底；浏览器窗口一直留着，不反复登录。</p>` : "";
+  return `
+      <div class="sync-intro">
+        <div class="seg" id="sPlat" style="margin-bottom:12px">${["douyin", "xhs"].map((p) => `<button data-p="${p}" class="${syncPlat === p ? "on" : ""}">${PNAME[p]}</button>`).join("")}</div>
+        <h2>同步${PNAME[syncPlat]}收藏</h2>
+        <p class="muted small">会弹出浏览器窗口，第一次需要用${PNAME[syncPlat]} App 扫码登录（只登录一次，之后一直保持）。读取时会自动慢慢滚动，请不要关闭那个窗口。之前失败的会自动重新排队。
+          下载的文件存进本地视频库：<b>${esc(xhs ? STATE.xhs_download_dir : STATE.download_dir)}</b>（按${xhs ? "专辑" : "收藏夹分类"}分文件夹）。</p>
+        ${guard}
+      </div>
+      <div class="sync-form">
+        <div class="field"><label>读取哪个列表 <a href="javascript:void 0" id="fRefresh" class="small" style="font-weight:400;margin-left:6px">${folders.length ? "刷新" : "读取"}${xhs ? "收藏专辑" : "收藏夹分类"}</a></label><select id="sKind">${syncKindOptions(s, s.sync_platform === syncPlat ? null : "collection")}</select></div>
+        <div class="field"><label>最多读取几条（从最新开始）</label><input id="sLimit" type="number" min="1" max="5000" value="${s.sync_limit || 50}"></div>
+        <div class="row sync-btns"><label class="check small" style="margin-right:auto"><input type="checkbox" id="sDlOnly" ${s.sync_download_only ? "checked" : ""}> 仅下载（不转文字、不润色；下载过的自动跳过）</label>
+          <button class="btn" id="loginBtn">只登录${PNAME[syncPlat]}</button><button class="btn primary" id="syncBtn">开始同步</button></div>
+      </div>`;
+}
+function bindSyncCard() {
+  $$("#sPlat button").forEach((b) => b.onclick = () => { syncPlat = b.dataset.p; $(".sync-card").innerHTML = syncCardHtml(STATE.settings); bindSyncCard(); });
+  $("#syncBtn").onclick = async () => {
+    const dlOnly = $("#sDlOnly").checked;
+    await api("/api/sync", { platform: syncPlat, kind: $("#sKind").value, limit: +$("#sLimit").value || 50, download_only: dlOnly });
+    toast(dlOnly ? "开始读取并下载，进度在下面「仅下载」里" : "开始同步，请留意弹出的浏览器窗口"); renderProcessLive();
+  };
+  $("#fRefresh").onclick = async () => {
+    const xhs = syncPlat === "xhs", key = xhs ? "xhs_folders" : "folders", word = xhs ? "收藏专辑" : "收藏夹分类";
+    await api("/api/folders", { platform: syncPlat });
+    toast(`正在读取${word}，稍等几秒`);
+    const before = STATE.settings[key + "_at"] || 0;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      await refreshState();
+      if ((STATE.settings[key + "_at"] || 0) > before) {
+        const keep = $("#sKind").value;
+        $("#sKind").innerHTML = syncKindOptions(STATE.settings, keep);
+        $("#fRefresh").textContent = "刷新" + word;
+        return toast(`读到 ${(STATE.settings[key] || []).length} 个${word}，在「读取哪个列表」里选`);
+      }
+      if (!STATE.worker.busy) break;
+    }
+    toast(`没读到${word}，看一下下面的运行日志`, 4000);
+  };
+  $("#loginBtn").onclick = async () => { await api("/api/login", { platform: syncPlat }); toast("请在弹出的浏览器窗口里扫码登录（不着急，最多等 30 分钟）"); };
+}
+
 async function renderProcess() {
   await refreshState();
   const s = STATE.settings;
+  if (!syncPlat) syncPlat = s.sync_platform || "douyin";
   view.innerHTML = `
-    <div class="head"><div><h1>添加与处理</h1><div class="muted">视频：读取信息 → 下载 → 本地转文字 → AI 提炼；图文：下载图片 → 识别图片文字 → AI 提炼</div></div></div>
+    <div class="head"><div><h1>添加与处理</h1><div class="muted">读取信息（必需）→ 下载进本地视频库 → 本地转文字 → 润色排版（保留原话，改动 ≤${s.max_change_pct || 15}%）→ 学习库</div></div>
+      <div class="spacer"></div><a class="btn" href="#/weekly">整理这一周的收藏 →</a></div>
     <div id="errSlot">${lastErrorBanner()}</div>
     ${bannerHtml()}
-    <div class="card sync-card">
-      <div class="sync-intro">
-        <h2>同步抖音收藏夹</h2>
-        <p class="muted small">会弹出浏览器窗口，第一次需要用抖音 App 扫码登录（只登录一次）。读取时会自动慢慢滚动，请不要关闭那个窗口。之前失败的视频会自动重新排队。</p>
-      </div>
-      <div class="sync-form">
-        <div class="field"><label>读取哪个列表</label><select id="sKind"><option value="collection">我的收藏</option><option value="like">我的喜欢</option></select></div>
-        <div class="field"><label>最多读取几条（从最新开始）</label><input id="sLimit" type="number" min="1" max="2000" value="${s.sync_limit || 50}"></div>
-        <div class="row sync-btns"><button class="btn" id="loginBtn">只登录抖音</button><button class="btn primary" id="syncBtn">开始同步</button></div>
-      </div>
-    </div>
+    <div class="card sync-card">${syncCardHtml(s)}</div>
     <div class="panels">
       <div class="card col-card">
         <h2>粘贴分享链接</h2>
-        <p class="muted small">抖音里点「分享 → 复制链接」，视频和图文都可以，一次能贴很多条。</p>
-        <textarea id="pText" rows="5" placeholder="粘贴一条或多条抖音分享内容……"></textarea>
+        <p class="muted small">抖音 / 小红书里点「分享 → 复制链接」，视频和图文都可以，一次能贴很多条，两个平台混在一起也行。</p>
+        <textarea id="pText" rows="5" placeholder="粘贴一条或多条抖音、小红书分享内容……"></textarea>
         <div class="row" style="margin-top:12px"><span class="spacer"></span><button class="btn primary" id="pAdd">添加并处理</button></div>
       </div>
       <div class="card col-card">
@@ -689,10 +747,28 @@ async function renderProcess() {
         <div class="row" style="margin-top:12px"><span class="spacer"></span><button class="btn" id="inboxOpen">打开收件箱文件夹</button><button class="btn" id="inboxScan">扫描并处理</button></div>
       </div>
     </div>
+    <div class="card" style="margin-bottom:20px">
+      <h2>导入本地文件夹</h2>
+      <p class="muted small">直接处理已经下载到电脑上的视频 / 图文（比如「仅下载」存下的收藏夹分类），不重新下载，原文件不移动、不删除。按当初下载的顺序（收藏夹从新到旧）取前 N 条。</p>
+      <div class="field"><label>文件夹</label><input id="impDir" placeholder="例如 D:\\douyin\\厉害" value="${esc(s.import_dir || "")}"></div>
+      <div class="field"><label>取前几条（留空 = 全部）</label><input id="impLimit" type="number" min="1" placeholder="全部"></div>
+      <div class="row"><label class="check small"><input type="checkbox" id="impNotes" checked> 包括图文文件夹</label>
+        <label class="check small" style="margin-left:16px;margin-right:auto"><input type="checkbox" id="impOnlyTr" ${s.auto_extract === false ? "checked" : ""}> 只转文字，先不 AI 提炼（之后在「待提炼」里点提炼）</label>
+        <button class="btn primary" id="impBtn">导入并处理</button></div>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <h2>仅下载</h2>
+      <p class="muted small">只把视频 / 图文存到电脑上：不转文字、不用 AI、不进学习库。视频按「作者 - 标题.mp4」命名，选画质最高的版本；图文存成文件夹（图片 + 正文.txt）。</p>
+      <div class="field" style="margin:0"><textarea id="dText" rows="3" placeholder="粘贴一条或多条抖音分享内容……" style="width:100%;box-sizing:border-box"></textarea></div>
+      <div class="row" style="margin-top:12px"><span class="muted small" id="dDir"></span><span class="spacer"></span>
+        <button class="btn" id="dOpen">打开下载文件夹</button><button class="btn primary" id="dAdd">仅下载</button></div>
+      <details class="fold" id="dlFold"><summary class="muted small">下载记录（点开查看）</summary><div class="qlist" id="dlList" style="margin-top:8px"></div></details>
+    </div>
     <div class="card status-card" id="statusCard" style="margin-bottom:20px"></div>
     <div class="card">
-      <div class="tabs" id="tabs"></div>
-      <div class="qlist" id="qlist"></div>
+      <div class="row"><div class="tabs" id="tabs" style="flex:1"></div>
+        <button class="btn sm ghost" id="qToggle" aria-expanded="false"></button></div>
+      <div class="qlist" id="qlist" hidden></div>
     </div>
     <div class="row" style="margin-top:22px;margin-bottom:12px"><h2 style="margin:0">运行日志</h2><span class="spacer"></span>
       <button class="btn sm" id="copyLogs">${ico("copy")}一键复制日志</button></div>
@@ -702,11 +778,7 @@ async function renderProcess() {
     try { const r = await api("/api/links", { text: $("#pText").value }); $("#pText").value = "";
       toast(r.added ? `新增 ${r.added} 条，开始处理` : "这些链接都已经添加过了"); renderProcessLive(); } catch (e) { toast(e.message, 4000); }
   };
-  $("#syncBtn").onclick = async () => {
-    await api("/api/sync", { kind: $("#sKind").value, limit: +$("#sLimit").value || 50 });
-    toast("开始同步：请看弹出的浏览器窗口，第一次要用抖音 App 扫码", 4000); renderProcessLive();
-  };
-  $("#loginBtn").onclick = async () => { await api("/api/login", {}); toast("请在弹出的浏览器窗口里扫码登录"); };
+  bindSyncCard();
   $("#copyLogs").onclick = async () => {
     const text = (STATE.logs || []).map((l) => `${fmtTime(l.t)} ${l.msg}`).join("\n");
     if (!text) return toast("还没有日志");
@@ -717,19 +789,82 @@ async function renderProcess() {
     }
     toast(`已复制 ${STATE.logs.length} 行日志，可以直接粘贴发给我`);
   };
+  $("#dAdd").onclick = async () => {
+    try { const r = await api("/api/download", { text: $("#dText").value }); $("#dText").value = "";
+      toast(r.added ? `${r.added} 条开始下载` : "这些链接已经在下载队列里了"); await refreshState(); renderProcessLive(); } catch (e) { toast(e.message, 4000); }
+  };
+  $("#dOpen").onclick = () => api("/api/open", { what: "downloads" }).catch((e) => toast(e.message));
   $(".inbox-box").onclick = () => api("/api/open", { what: "inbox" }).catch((e) => toast(e.message));
   $("#inboxOpen").onclick =() => api("/api/open", { what: "inbox" }).catch((e) => toast(e.message));
+  $("#impBtn").onclick = async () => {
+    const path = $("#impDir").value.trim();
+    if (!path) return toast("先填文件夹路径");
+    try {
+      const r = await api("/api/import_folder", { path, limit: Number($("#impLimit").value) || 0,
+        include_notes: $("#impNotes").checked, transcribe_only: $("#impOnlyTr").checked });
+      toast(r.total ? `共 ${r.total} 条（新增 ${r.added}），开始处理` : "这个文件夹里没有可处理的文件");
+      await refreshState(); renderProcessLive();
+    } catch (e) { toast(e.message); }
+  };
   $("#inboxScan").onclick = async () => { const r = await api("/api/inbox", {}); toast(r.added ? `新增 ${r.added} 个文件，开始处理` : "收件箱里没有新文件"); renderProcessLive(); };
   renderProcessLive();
 }
 
+// 已跳过的大类（按跳过原因归）
+const SKIP_GROUPS = [
+  ["重复", /重复/], ["视频已删除 / 私密", /已删除或设为私密/], ["超过 15 分钟的长视频", /分钟的长视频|长视频/],
+  ["画面为主 / 没说话", /几乎没有说话|画面为主|没有声音|纯音乐|无对白/],
+  ["残缺 / 断续口播", /残缺|断续口播/], ["转写质量差（待重转）", /转写太乱|质量极差|待重转|无法辨识/],
+  ["以前的旧收藏（没处理过）", /以前就收藏的旧条目/], ["图文没内容", /图片|图文|文字（可能/],
+  ["广告", /广告/], ["其他", /.*/],
+];
+const SKIP_OPEN = new Set();  // 已跳过里点开的分组：页面几秒刷新一次，刷新后保持展开
+const skipGroup = (reason) => (SKIP_GROUPS.find(([, re]) => re.test(reason || "")) || ["其他"])[0];
+function origLink(it) {
+  if (it.url && /^https?:/.test(it.url)) return it.url;
+  if (!it.aweme_id) return "";
+  return it.platform === "xhs" ? `https://www.xiaohongshu.com/explore/${it.aweme_id}` : `https://www.douyin.com/video/${it.aweme_id}`;
+}
+
 const TABS = [
-  ["active", "处理中", ACTIVE], ["failed", "失败", ["failed"]], ["need_key", "待提炼", ["need_key"]],
+  ["active", "处理中", ACTIVE], ["failed", "失败", ["failed"]], ["need_key", "待润色", ["need_key"]],
   ["irrelevant", "主题无关", ["irrelevant"]], ["skipped", "已跳过", ["skipped"]], ["done", "已完成", ["done"]],
 ];
 
-async function renderProcessLive() {
+const DL_STATUS = { queued: ["排队中", "gray"], running: ["下载中", ""], done: ["已下载", "teal"], skipped: ["之前下载过", "gray"], failed: ["失败", "bad"] };
+
+function renderDownloads() {
+  const el = $("#dlList");
+  if (!el) return;
+  $("#dDir").textContent = "保存到：" + (STATE.download_dir || "");
+  const list = STATE.downloads || [];
+  const c = STATE.download_counts || {};
+  const failed = c.failed || 0;
+  const finished = (c.done || 0) + (c.failed || 0) + (c.skipped || 0);
+  const parts = [["running", "下载中"], ["queued", "排队"], ["done", "已下载"], ["skipped", "之前下载过"], ["failed", "失败"]]
+    .filter(([k]) => c[k]).map(([k, t]) => `${t} ${c[k]}`).join(" · ");
+  const head = list.length ? `<div class="row" style="padding:8px 4px"><span class="muted small">${parts}${list.length >= 50 ? "（下面只列最近 50 条）" : ""}</span><span class="spacer"></span>
+      ${failed ? `<button class="btn sm" id="dRetry">重试失败的 ${failed} 条</button>` : ""}${finished ? `<button class="btn sm ghost" id="dClear">清空记录</button>` : ""}</div>` : "";
+  el.innerHTML = head + list.map((d) => {
+    const [label, cls] = DL_STATUS[d.status] || [d.status, "gray"];
+    const kind = d.kind === "note" ? "图文" : d.kind === "video" ? "视频" : "";
+    const sub = d.status === "failed" ? d.error : d.path ? d.path.split(/[\\/]/).pop() : d.url;
+    return `<div class="qrow"><div style="min-width:0">
+        <div class="t">${esc((d.author ? d.author + " - " : "") + (d.title || d.url))}</div>
+        <div class="r"><span class="chip ${cls}">${label}</span> ${kind ? `<span class="chip gray">${kind}</span>` : ""} ${esc(sub || "")}</div></div>
+        <div class="row">${d.status === "done" || (d.status === "skipped" && d.path) ? `<button class="btn sm" data-dl="${d.id}">在文件夹中显示</button>` : ""}</div></div>`;
+  }).join("");
+  $$("#dlList [data-dl]").forEach((b) => b.onclick = () => api("/api/open", { what: "download", id: +b.dataset.dl }).catch((e) => toast(e.message)));
+  $("#dRetry") && ($("#dRetry").onclick = async () => { const r = await api("/api/download/retry", {}); toast(`${r.retried} 条重新下载`); await refreshState(); renderDownloads(); });
+  $("#dClear") && ($("#dClear").onclick = async () => { await api("/api/download/clear", {}); await refreshState(); renderDownloads(); });
+}
+
+let lastListKey = "", lastDlKey = "";
+async function renderProcessLive(opt = {}) {
   if (!$("#statusCard")) return;
+  // 定时刷新时，下载记录没变就不重画
+  const dlKey = JSON.stringify([STATE.downloads, STATE.download_counts, STATE.download_dir]);
+  if (!opt.poll || dlKey !== lastDlKey) { lastDlKey = dlKey; renderDownloads(); }
   const w = STATE.worker, st = STATE.stats.by_status;
   const pg = STATE.progress || {};
   const es = $("#errSlot"); if (es) { const h = lastErrorBanner(); if (es.dataset.h !== h) { es.innerHTML = h; es.dataset.h = h; } }
@@ -738,7 +873,7 @@ async function renderProcessLive() {
         <div class="row"><div class="spinner"></div><b class="ptitle">${esc(pg.title || "处理中")}</b><span class="spacer"></span><button class="btn sm" id="stopBtn">停止</button></div>
         <div class="stepper">${["fetching", "downloading", "transcribing", "extracting"].map((k) => {
             const lbl = (pg.is_note ? { fetching: "读取图文", downloading: "下载图片", transcribing: "识别图片文字", extracting: "AI 提炼" }
-              : { fetching: "读取信息", downloading: "下载", transcribing: "转文字", extracting: "AI 提炼" })[k];
+              : { fetching: "读取信息", downloading: "下载", transcribing: "转文字", extracting: "润色排版" })[k];
             const order = ["fetching", "downloading", "transcribing", "extracting"];
             const cls = k === pg.stage ? "now" : (order.indexOf(k) < order.indexOf(pg.stage) ? "done" : "");
             return `<span class="step ${cls}">${cls === "done" ? "✓ " : ""}${lbl}${k === pg.stage ? ` ${pg.stage_pct}%` : ""}</span>`; }).join('<span class="arrow">›</span>')}</div>
@@ -765,37 +900,92 @@ async function renderProcessLive() {
     const n = ss.reduce((a, s) => a + (st[s] || 0), 0);
     return `<button data-k="${k}" class="${procTab === k ? "on" : ""}">${label} ${n ? `(${n})` : ""}</button>`;
   }).join("");
-  $$("#tabs button").forEach((b) => b.onclick = () => { procTab = b.dataset.k; renderProcessLive(); });
+  $$("#tabs button").forEach((b) => b.onclick = () => {
+    if (procTab === b.dataset.k && procOpen) procOpen = false; else { procTab = b.dataset.k; procOpen = true; }
+    renderProcessLive();
+  });
+  // 列表默认收起：点「展开列表」或点某个 tab 才列出来，条目多时不会一下铺满页面
+  $("#qToggle").textContent = procOpen ? "收起 ▴" : "展开列表 ▾";
+  $("#qToggle").setAttribute("aria-expanded", procOpen);
+  $("#qToggle").onclick = () => { procOpen = !procOpen; renderProcessLive(); };
+  $("#qlist").hidden = !procOpen;
+  $$("#tabs button").forEach((b) => b.classList.toggle("on", procOpen && b.dataset.k === procTab));
+  if (!procOpen) { $("#qlist").innerHTML = ""; lastListKey = ""; renderLogs(); return; }
+  // 定时刷新时：各状态的条数、正在处理的那条都没变，列表就不重新下载、不重画（以前每秒整份重来）
+  const listKey = JSON.stringify([procTab, STATE.stats.by_status, STATE.worker.item_id]);
+  if (opt.poll && listKey === lastListKey && $("#qlist").childElementCount) { renderLogs(); return; }
+  lastListKey = listKey;
 
   const ss = TABS.find((t) => t[0] === procTab)[2];
-  const items = await api("/api/items?status=" + ss.join(","));
-  $("#qlist").innerHTML = items.length ? items.slice(0, 300).map((it) => {
+  const items = await api("/api/items?status=" + ss.join(",") + (procTab === "skipped" ? "&limit=5000" : ""));
+  const rowHtml = (it) => {
     const [label, cls] = STATUS[it.status] || [it.status, "gray"];
     let btns = "";
     if (it.status === "failed") btns = `<button class="btn sm" data-a="retry" data-id="${it.id}">重试</button>`;
-    if (it.status === "need_key") btns = `<button class="btn sm" data-a="reextract" data-id="${it.id}">提炼</button>`;
+    if (it.status === "need_key") btns = `<button class="btn sm" data-a="reextract" data-id="${it.id}">润色</button>`;
     if (it.status === "irrelevant") btns = `<button class="btn sm" data-a="include" data-id="${it.id}">收进学习库</button>`;
+    if (it.status === "skipped") {
+      const src = origLink(it);
+      btns = `<button class="btn sm" data-a="force_include" data-id="${it.id}" title="不管跳过的原因，重新处理并收进学习库">加入整理</button>`
+        + (src ? ` <a class="btn sm" href="${esc(src)}" target="_blank" rel="noopener" title="在新标签页打开原视频 / 笔记">原始链接</a>` : "");
+    }
     if (["failed", "skipped", "irrelevant", "need_key", "queued"].includes(it.status)) btns += ` <button class="btn sm ghost" data-a="delete" data-id="${it.id}">删除</button>`;
     return `<div class="qrow"><div style="min-width:0">
         <div class="t"><a href="#/item/${it.id}" style="color:inherit">${esc(it.note_title || it.title || it.url || "（解析中）")}</a></div>
         <div class="r"><span class="chip ${cls}">${label}</span> ${esc(it.reason || "")}${it.status === "failed" && fixHint(it.reason) ? `<div class="fix">怎么办：${esc(fixHint(it.reason))}</div>` : ""}</div></div>
         <div class="row">${btns}</div></div>`;
-  }).join("") : `<div class="empty" style="padding:30px">这里是空的</div>`;
+  };
+  if (!items.length) $("#qlist").innerHTML = `<div class="empty" style="padding:30px">这里是空的</div>`;
+  else if (procTab === "skipped") {
+    // 已跳过：按原因分大类，默认收起，点开再看
+    const groups = new Map(SKIP_GROUPS.map(([name]) => [name, []]));
+    for (const it of items) groups.get(skipGroup(it.reason)).push(it);
+    $("#qlist").innerHTML = [...groups].filter(([, l]) => l.length).map(([name, l]) =>
+      `<details class="fold skipgrp" data-g="${esc(name)}"${SKIP_OPEN.has(name) ? " open" : ""}><summary><b>${esc(name)}</b> <span class="muted">${l.length} 条</span>`
+      + `<span class="grp-acts"><button class="btn sm" data-ga="force_include" data-ids="${l.map((x) => x.id).join(",")}" data-n="${esc(name)}">整组加入整理</button>`
+      + `<button class="btn sm ghost" data-ga="delete" data-ids="${l.map((x) => x.id).join(",")}" data-n="${esc(name)}">整组删除</button></span></summary>`
+      + l.slice(0, 300).map(rowHtml).join("") + (l.length > 300 ? `<div class="muted small" style="padding:8px">只列前 300 条（整组按钮对全部 ${l.length} 条生效）</div>` : "")
+      + `</details>`).join("");
+    $$("#qlist [data-ga]").forEach((b) => b.onclick = async (e) => {
+      e.preventDefault(); e.stopPropagation();  // 别让点击展开 / 收起分组
+      const ids = b.dataset.ids.split(",").map(Number), a = b.dataset.ga;
+      const msg = a === "delete"
+        ? `删除「${b.dataset.n}」整组 ${ids.length} 条？\n只删学习台里的记录，视频文件不动。以后代刷不会再刷到它们；同步收藏时仍可能加回来。`
+        : `把「${b.dataset.n}」整组 ${ids.length} 条都加入整理？\n会一条一条重新处理（下载 / 转写 / AI 润色），条数多会花不少时间。`;
+      if (!confirm(msg)) return;
+      b.disabled = true;
+      const r = await api("/api/items/batch", { ids, action: a });
+      toast(a === "delete" ? `已删除 ${r.n} 条` : `${r.n} 条已加入整理，开始处理`);
+      await refreshState(); renderProcessLive();
+    });
+    $$("#qlist details.skipgrp").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open) SKIP_OPEN.add(d.dataset.g); else SKIP_OPEN.delete(d.dataset.g);
+    }));
+  } else $("#qlist").innerHTML = items.slice(0, 300).map(rowHtml).join("");
   $$("#qlist [data-a]").forEach((b) => b.onclick = async () => {
     const a = b.dataset.a;
     if (a === "delete" && !confirm("删除这条？")) return;
     await api(`/api/items/${b.dataset.id}/action`, { action: a });
+    if (a === "force_include") toast("已加入整理：重新处理后收进学习库，进度在下面的日志");
     await refreshState(); renderProcessLive();
   });
   if (procTab === "need_key" && items.length > 1 && STATE.settings.api_key_set) {
-    $("#qlist").insertAdjacentHTML("afterbegin", `<div class="row" style="padding:8px 4px"><span class="muted small">AI Key 已填好，可以一次全部提炼</span><span class="spacer"></span><button class="btn sm primary" id="allRe">全部提炼</button></div>`);
+    $("#qlist").insertAdjacentHTML("afterbegin", `<div class="row" style="padding:8px 4px"><span class="muted small">AI 已配置好，可以一次全部润色</span><span class="spacer"></span><button class="btn sm primary" id="allRe">全部润色</button></div>`);
     $("#allRe").onclick = async () => { for (const it of items) await api(`/api/items/${it.id}/action`, { action: "reextract" }); toast("已全部加入队列"); };
   }
   if (procTab === "failed" && items.length >= 1) {
     $("#qlist").insertAdjacentHTML("afterbegin", `<div class="row" style="padding:8px 4px"><span class="spacer"></span><button class="btn sm" id="allRetry">全部重试</button></div>`);
     $("#allRetry").onclick = async () => { for (const it of items) await api(`/api/items/${it.id}/action`, { action: "retry" }); toast("已全部重新排队，开始处理"); await refreshState(); renderProcessLive(); };
   }
+  renderLogs();
+}
+
+function renderLogs() {
   const logs = $("#logs");
+  if (!logs) return;
+  const L = STATE.logs || [], key = L.length + ":" + (L.length ? L[L.length - 1].t : 0);
+  if (logs.dataset.key === key && logs.childElementCount) return;  // 没有新日志就不重画
+  logs.dataset.key = key;
   const atBottom = logs.scrollTop + logs.clientHeight >= logs.scrollHeight - 20;
   logs.innerHTML = (STATE.logs || []).map((l) => `<div><span>${fmtTime(l.t)}</span>${esc(l.msg)}</div>`).join("") || `<div class="muted">暂无日志</div>`;
   if (atBottom) logs.scrollTop = logs.scrollHeight;
@@ -871,7 +1061,6 @@ async function renderSettings() {
       <div class="field"><label>图片文字识别（图文用）</label>
         <div class="${STATE.ocr?.backend ? "" : "banner warn"}" style="${STATE.ocr?.backend ? "" : "margin:0"}">${STATE.ocr?.backend ? `✓ ${esc(STATE.ocr.label)}（在本机运行，图片不上传）` : "还没安装文字识别组件：请重新运行一次安装脚本。没装的话，图文只会用正文文字。"}</div></div>
       <div class="field"><label class="check"><input type="checkbox" id="mirror" ${s.use_hf_mirror ? "checked" : ""}> 使用国内镜像下载模型（人在中国大陆时勾选；在海外不要勾）</label></div>
-      <div class="field"><label class="check"><input type="checkbox" id="keepVideo" ${s.keep_video ? "checked" : ""}> 转录后保留视频文件（默认删除，节省空间）</label></div>
     </div>
     <div class="card form" style="margin-bottom:16px" id="backupCard">
       <h2>备份与恢复</h2>
@@ -891,7 +1080,12 @@ async function renderSettings() {
       <h2>存储与浏览器</h2>
       <div class="field"><label>笔记保存位置（可以直接用 Obsidian 打开这个文件夹；留空 = 默认位置）</label>
         <div class="row"><input id="libDir" value="${esc(s.library_dir)}" placeholder="${esc(STATE.library_dir)}" style="flex:1"><button class="btn" id="openLib">打开文件夹</button></div></div>
-      <div class="field"><label>用哪个浏览器登录抖音</label><select id="browser">
+      <div class="field"><label>抖音本地视频库（下载位置，按收藏夹分类分文件夹；留空 = 默认位置）</label>
+        <div class="row"><input id="dlDir" value="${esc(s.download_dir || "")}" placeholder="${esc(STATE.download_dir)}" style="flex:1"><button class="btn" id="openDl">打开文件夹</button></div></div>
+      <div class="field"><label>小红书本地视频库（按专辑分文件夹；留空 = 默认位置）</label>
+        <input id="xDlDir" value="${esc(s.xhs_download_dir || "")}" placeholder="${esc(STATE.xhs_download_dir)}"></div>
+      <label class="check small"><input type="checkbox" id="keepVideo2" ${s.keep_video !== false ? "checked" : ""}> 处理过的视频留在本地视频库里（随时能在学习库里点「原视频」看）</label>
+      <div class="field"><label>用哪个浏览器登录抖音 / 小红书</label><select id="browser">
         ${[["auto", "自动（先找 Edge，再找 Chrome）"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"], ["chromium", "内置 Chromium（需单独安装）"]]
           .map(([k, l]) => `<option value="${k}" ${s.browser === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     </div>
@@ -902,17 +1096,38 @@ async function renderSettings() {
         <label class="check"><input type="checkbox" id="checkUpd" ${s.check_update !== false ? "checked" : ""}> 自动检查新版本（只向 GitHub 问最新版本号，不上传任何内容）</label>
         <span class="spacer"></span><button class="btn" id="updCheck">现在检查</button>
       </div>
+    <div class="card form" style="margin-bottom:16px">
+      <h2>小红书防封号</h2>
+      <p class="muted small">小红书风控严：一律一条一条读，不并发；浏览器窗口一直留着，不反复登录；被限流 / 要验证就自动冷却，重启程序也记得。</p>
+      <div class="field"><label>每读一条详情之间随机歇几秒（最少～最多）</label>
+        <div class="row"><input id="xDelayLo" type="number" min="1" max="120" value="${(s.xhs_delay || [4, 9])[0]}" style="width:90px"> ～ <input id="xDelayHi" type="number" min="1" max="300" value="${(s.xhs_delay || [4, 9])[1]}" style="width:90px"> 秒</div></div>
+      <div class="field"><label>每天最多读几条详情（超过就停到第二天）</label><input id="xCap" type="number" min="10" max="5000" value="${s.xhs_daily_cap || 400}"></div>
+      <label class="check small"><input type="checkbox" id="xWeb" ${s.web_parse_fallback !== false ? "checked" : ""}> XHS-Downloader 读不到时，用免登录的网页解析站兜底（kukutool，最低画质；遇到要付费就停，绝不付钱）</label>
+    </div>
+    <div class="card form" style="margin-bottom:16px">
+      <h2>润色排版（第三步）</h2>
+      <div class="field"><label>方式</label><select id="refineMode">
+        <option value="yuedu" ${s.refine_mode !== "notes" ? "selected" : ""}>保留原话：只改错字、删口水词、补标点，排成好读的文章（推荐）</option>
+        <option value="notes" ${s.refine_mode === "notes" ? "selected" : ""}>旧版：提炼成结构化学习笔记（总结、要点、自测题）</option></select></div>
+      <div class="field"><label>改动上限（%）：超过会让 AI 改回原话重来一次</label><input id="maxPct" type="number" min="5" max="40" value="${s.max_change_pct || 15}"></div>
     </div>
     <div class="row"><span class="spacer"></span>${s.api_key_set ? `<button class="btn ghost" id="clearKey">清除已保存的 Key</button>` : ""}<button class="btn primary" id="saveBtn">保存设置</button></div>`;
 
+  const CLI_HINTS = {
+    claude_cli: "不用填 Key：调用本机的 Claude Code（claude 命令），用你自己的 Claude 订阅额度。第一次用前在终端运行 claude 并 /login。模型填 sonnet / opus / haiku。",
+    codex_cli: "不用填 Key：调用本机的 Codex（codex 命令），用你自己的 ChatGPT 订阅额度。先安装：npm i -g @openai/codex，再在终端运行 codex 登录。模型填 default 用 Codex 的默认模型。",
+  };
+  let CLI_HINT = CLI_HINTS.claude_cli;
   const showKeyLink = () => {
     const p = P[$("#provider").value];
-    $("#keyLink").innerHTML = p.key_url ? `<a href="${esc(p.key_url)}" target="_blank" rel="noopener">去 ${esc(p.name)} 申请 Key →</a>` : "填写任意 OpenAI 兼容接口的地址和模型名";
+    CLI_HINT = CLI_HINTS[p.kind] || CLI_HINTS.claude_cli;
+    $("#keyLink").innerHTML = p.no_key ? CLI_HINT : p.key_url ? `<a href="${esc(p.key_url)}" target="_blank" rel="noopener">去 ${esc(p.name)} 申请 Key →</a>` : "填写任意 OpenAI 兼容接口的地址和模型名";
   };
   showKeyLink();
   const showDKeyLink = () => {
     const p = P[$("#dProvider").value];
-    $("#dKeyLink").innerHTML = p.key_url ? `<a href="${esc(p.key_url)}" target="_blank" rel="noopener">去 ${esc(p.name)} 申请 Key →</a>` : "";
+    CLI_HINT = CLI_HINTS[p.kind] || CLI_HINTS.claude_cli;
+    $("#dKeyLink").innerHTML = p.no_key ? CLI_HINT : p.key_url ? `<a href="${esc(p.key_url)}" target="_blank" rel="noopener">去 ${esc(p.name)} 申请 Key →</a>` : "";
   };
   showDKeyLink();
   $("#deepSame").onchange = (e) => { $("#deepCfg").hidden = e.target.checked; };
@@ -978,6 +1193,7 @@ async function renderSettings() {
   if (location.hash === "#/settings/update") $("#updateCard").scrollIntoView({ block: "start" });
   setupFreePlan();
   $("#openLib").onclick = () => api("/api/open", { what: "library" }).catch((e) => toast(e.message));
+  $("#openDl").onclick = () => api("/api/open", { what: "downloads" }).catch((e) => toast(e.message));
   $("#clearKey") && ($("#clearKey").onclick = async () => { if (confirm("清除已保存的 API Key？")) { await api("/api/settings", { clear_key: true }); toast("已清除"); renderSettings(); } });
   $("#saveBtn").onclick = async () => {
     await api("/api/settings", {
@@ -987,7 +1203,10 @@ async function renderSettings() {
       deep_chunk_chars: +$("#dChunk").value,
       focus_topic: $("#focus").value.trim(), only_relevant: $("#onlyRel").checked, categories: $("#cats").value,
       whisper_model: $("#wm").value, asr_engine: $("#engine").value, use_subtitles: $("#useSubs").checked, max_minutes: +$("#maxMin").value, use_hf_mirror: $("#mirror").checked,
-      keep_video: $("#keepVideo").checked, library_dir: $("#libDir").value.trim(), browser: $("#browser").value,
+      keep_video: $("#keepVideo2").checked, library_dir: $("#libDir").value.trim(), download_dir: $("#dlDir").value.trim(), browser: $("#browser").value, welcome_done: true,
+      xhs_download_dir: $("#xDlDir").value.trim(), xhs_daily_cap: +$("#xCap").value || 400, web_parse_fallback: $("#xWeb").checked,
+      xhs_delay: [Math.max(1, +$("#xDelayLo").value || 4), Math.max(+$("#xDelayLo").value || 4, +$("#xDelayHi").value || 9)],
+      refine_mode: $("#refineMode").value, max_change_pct: +$("#maxPct").value || 15,
       check_update: $("#checkUpd").checked,
     });
     toast("已保存"); renderSettings();
@@ -1010,7 +1229,8 @@ let weeklyDue = null;
 (async () => {
   await refreshState();
   try { weeklyDue = await api("/api/weekly/due"); $("#navWeekly").hidden = !weeklyDue.due; } catch {}
-  if (!location.hash) location.hash = guideActive() ? "#/start" : "#/library";
+  // 新手引导没做完先去引导页；否则先到「添加与处理」（轻），学习库是整页，点了再加载
+  if (!location.hash) location.hash = guideActive() ? "#/start" : "#/process";
   render();
   startPolling();
 })();
@@ -1645,6 +1865,20 @@ async function renderWeekly(offset) {
         ${r.is_current ? "" : `<a class="btn sm" href="#/weekly">本周</a>`}
         ${r.is_current ? `<button class="btn sm" disabled>下一周 ›</button>` : `<a class="btn sm" href="#/weekly/${r.offset + 1}">下一周 ›</a>`}
       </div></div>
+    ${r.is_current ? `<div class="card weekly-sync">
+      <div style="flex:1;min-width:240px"><h2 style="margin:0 0 4px">整理这一周的收藏</h2>
+        <div class="muted small">点一下：读抖音和小红书「收藏」里最新的收藏（碰到连续 20 条已经有的就停，不会把整个列表刷一遍），
+          下载进本地视频库 → 转文字 → 保留原话润色排版 → 收进学习库，最后生成这一周的周报。一条一条来，防封号。</div>
+        <div class="small" style="margin-top:8px">${r.last_sync ? `上次整理：${new Date(r.last_sync * 1000).toLocaleString("zh-CN", { hour12: false })}` : "还没整理过"}
+          ${Object.keys(r.fav_new || {}).length ? ` · 这周新收藏：${Object.entries(r.fav_new).map(([p, n]) => `${PNAME[p] || p} ${n} 条`).join("、")}` : ""}</div>
+        <div class="row small" style="margin-top:8px;gap:14px">${["douyin", "xhs"].map((p) => `<label class="check"><input type="checkbox" class="wkPlat" value="${p}" checked> ${PNAME[p]}</label>`).join("")}</div>
+      </div>
+      ${STATE?.worker?.task === "weekly_sync" ? `<div class="row"><div class="spinner"></div><span class="small">${esc(STATE.worker.stage || "整理中…")}</span><a class="btn sm" href="#/process">看进度</a><button class="btn sm danger" id="wkStop">停止整理</button></div>`
+        : `<div class="col" style="display:flex;flex-direction:column;gap:8px;align-items:stretch">
+             <button class="btn primary" id="wkSync">${ico("retry")}开始整理</button>
+             <button class="btn" id="wkMonth" title="抖音：按收藏时间，把最近 30 天收藏的全部过一遍。小红书接口不给收藏时间：读到连续 20 条以前就有的（旧库导入的、或 30 天前就见过的）就停，比每周整理多往下看一点">按月整理（最近 30 天）</button>
+             ${r.last_monthly ? `<span class="muted small">上次按月：${new Date(r.last_monthly * 1000).toLocaleDateString("zh-CN")}</span>` : ""}</div>`}
+    </div>` : ""}
     <div class="card streak-card">
       <div class="streak-ic">${ico("flame")}</div>
       <div><div class="streak-n">连续学习 <b>${r.streak}</b> 周</div><div class="muted small">${cheer}。标记学会、精读、做测验、回答检查题都算学习。</div></div>
@@ -1674,4 +1908,94 @@ async function renderWeekly(offset) {
     try { await api("/api/weekly/save", { offset: r.offset }); toast("已保存到「_周报」文件夹"); }
     catch (e) { toast(e.message, 4000); }
   };
+  $("#wkStop") && ($("#wkStop").onclick = async () => {
+    const b = $("#wkStop"); b.disabled = true; b.textContent = "正在停止…";
+    await api("/api/stop", {}).catch(() => {});
+    toast("已发出停止：正在读的列表马上停，正在转写的这一条做完就停", 4000);
+    for (let i = 0; i < 600; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      await refreshState();
+      if (STATE?.worker?.task !== "weekly_sync") break;
+    }
+    if (location.hash.startsWith("#/weekly")) renderWeekly(offset);
+  });
+  $("#wkMonth") && ($("#wkMonth").onclick = async () => {
+    const platforms = $$(".wkPlat").filter((c) => c.checked).map((c) => c.value);
+    if (!platforms.length) return toast("至少选一个平台");
+    const ready = await loginGate(platforms);
+    if (!ready || !ready.length) return;
+    await api("/api/weekly/sync", { platforms: ready, full: true, days: 30 });
+    toast("开始按月整理：把最近 30 天的收藏完整过一遍，进度在「添加与处理」", 4000);
+    await refreshState(); renderWeekly(offset);
+  });
+  $("#wkSync") && ($("#wkSync").onclick = async () => {
+    const platforms = $$(".wkPlat").filter((c) => c.checked).map((c) => c.value);
+    if (!platforms.length) return toast("至少选一个平台");
+    const ready = await loginGate(platforms);
+    if (!ready || !ready.length) return;
+    await api("/api/weekly/sync", { platforms: ready });
+    toast("开始整理这一周的收藏：会弹出浏览器窗口读收藏列表，进度在「添加与处理」");
+    await refreshState(); renderWeekly(offset);
+  });
+}
+
+
+// ---------------------------------------------------------------- 整理前的登录检查
+// 点「开始整理」先检查各平台登录：都登录了直接开始；有过期的就弹出这个框，后台同时把那个平台的浏览器窗口
+// 提到最前面、打开扫码。扫完点「我登好了」再查一次；窗口不小心关了点「重新打开浏览器」；
+// 有平台登不上也可以点红色按钮，只整理已经登录的。返回要整理的平台列表，取消返回 null。
+function loginGate(platforms) {
+  const m = $("#loginModal"), list = $("#lgList"), msg = $("#lgMsg"), done = $("#lgDone"), part = $("#lgPartial");
+  let alive = true, busy = false, lg = {};
+  const okOnes = () => platforms.filter((p) => lg[p]?.ok === true);
+  const badOnes = () => platforms.filter((p) => lg[p]?.ok === false);
+  return new Promise((resolve) => {
+    const finish = (v) => { alive = false; m.hidden = true; resolve(v); };
+    $("#lgClose").onclick = $("#lgCancel").onclick = () => finish(null);
+    part.onclick = () => finish(okOnes());
+    const draw = () => {
+      list.innerHTML = platforms.map((p) => {
+        const x = lg[p] || {};
+        const [cls, txt] = x.ok === true ? ["ok", "✓ " + (x.msg || "已登录")] : x.ok === false ? ["bad", "✗ " + (x.msg || "没登录")] : ["wait", "检查中…"];
+        return `<li><b>${PNAME[p] || p}</b><span class="st ${cls}">${esc(txt)}</span>`
+          + (x.ok === false && !busy ? `<button class="btn sm" data-reopen="${p}">重新打开浏览器</button>` : "") + "</li>";
+      }).join("");
+      $$("#lgList [data-reopen]").forEach((b) => (b.onclick = () => check([b.dataset.reopen], { reopen: true })));
+      const ok = okOnes(), bad = badOnes();
+      done.hidden = busy || !bad.length;
+      part.hidden = busy || !bad.length || !ok.length;
+      part.textContent = `不等了，只整理${ok.map((p) => PNAME[p]).join("、")}`;
+    };
+    const check = async (plats, { again = false, reopen = false } = {}) => {
+      busy = true;
+      plats.forEach((p) => (lg[p] = { ok: null }));
+      draw();
+      msg.className = "small";
+      msg.textContent = reopen ? `正在重新打开${plats.map((p) => PNAME[p]).join("、")}的浏览器窗口…` : "正在检查登录…";
+      try { await api("/api/login/check", { platforms: plats, reopen }); }
+      catch (e) { busy = false; msg.className = "small warn"; msg.textContent = e.message; draw(); return; }
+      while (alive) {
+        await refreshState();
+        const now = STATE?.login || {}, w = STATE?.worker || {};
+        plats.forEach((p) => { if (now[p] && now[p].ok !== null && now[p].ok !== undefined) lg[p] = now[p]; });
+        if (plats.every((p) => lg[p]?.ok !== null && lg[p]?.ok !== undefined)) {
+          busy = false;
+          const bad = badOnes();
+          draw();
+          if (!bad.length) { msg.className = "small"; msg.textContent = "都登录好了，开始整理…"; setTimeout(() => finish(platforms), 600); return; }
+          const names = bad.map((p) => PNAME[p]).join("、");
+          msg.className = again ? "small warn" : "small";
+          msg.textContent = again
+            ? `${names}还没登录成功，请继续在弹出的浏览器窗口里完成扫码登录，登好后再点「我登好了」。窗口关掉了就点「重新打开浏览器」。`
+            : `已经弹出${names}的浏览器窗口，请用手机 App 扫码登录，登好后点「我登好了」。窗口不小心关了，点「重新打开浏览器」。`;
+          return;
+        }
+        draw();
+        if (w.busy && w.task && w.task !== "login_check") msg.textContent = "后台正在处理别的条目，这一条做完就检查登录…";
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    };
+    done.onclick = () => check(badOnes(), { again: true });
+    m.hidden = false; check([...platforms]);
+  });
 }

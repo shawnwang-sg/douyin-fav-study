@@ -3,10 +3,15 @@
 只把文字稿发给你选的 AI 服务商；视频、音频、你的个人笔记都不会上传。
 """
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 MAX_CHARS = 6000  # 文字稿太长就截断，控制花费
 
@@ -84,6 +89,10 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
     cfg 可以是整份设置，也可以是 config.llm_cfg() 的结果。
     """
     cfg = _as_cfg(cfg)
+    if cfg.get("kind") == "claude_cli":
+        return _claude_cli(cfg, messages, json_mode=json_mode, timeout=timeout)
+    if cfg.get("kind") == "codex_cli":
+        return _codex_cli(cfg, messages, json_mode=json_mode, timeout=timeout)
     key = (cfg.get("api_key") or "").strip()
     base = (cfg.get("base_url") or "").strip().rstrip("/")
     model = (cfg.get("model") or "").strip()
@@ -177,16 +186,137 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
             raise LLMError(f"AI 接口返回的格式看不懂：{e}")
 
 
+CLAUDE_CLI_MODELS = ["sonnet", "opus", "haiku"]
+
+
+def _claude_exe():
+    exe = shutil.which("claude")
+    if not exe:
+        p = Path.home() / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude")
+        exe = str(p) if p.exists() else None
+    if not exe:
+        raise LLMError("没找到 Claude Code（claude 命令）。请先安装 Claude Code 并登录一次。")
+    return exe
+
+
+def _clean_env():
+    """去掉宿主程序（比如 Claude 桌面版）注入的变量，让 claude 用它自己保存的登录。"""
+    env = {k: v for k, v in os.environ.items()
+           if not (k.startswith("CLAUDE") or k.startswith("ANTHROPIC"))}
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
+def _claude_cli(cfg, messages, json_mode=True, timeout=120):
+    """用本机 Claude Code（claude -p）调用，走你自己的 Claude 订阅额度，不需要 API Key。
+
+    关掉所有工具、MCP 和项目设置，只当纯文本问答用。返回 (文本, token 数)。
+    """
+    model = (cfg.get("model") or "").strip() or "sonnet"
+    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    rest = [m for m in messages if m["role"] != "system"]
+    if len(rest) == 1:
+        prompt = rest[0]["content"]
+    else:
+        # 多轮对话（比如问老师）：按顺序拼成一段，最后一条是要回答的问题
+        names = {"user": "用户", "assistant": "助手"}
+        prompt = "以下是之前的对话记录，请接着回答最后一条用户消息：\n\n" + "\n\n".join(
+            f"【{names.get(m['role'], m['role'])}】\n{m['content']}" for m in rest)
+    if json_mode:
+        prompt += "\n\n（只输出 JSON 对象本身，不要用代码块包裹，不要输出任何其他文字。）"
+    cmd = [_claude_exe(), "-p", "--output-format", "json", "--model", model,
+           "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence"]
+    if system:
+        cmd += ["--system-prompt", system]
+    work = Path(tempfile.gettempdir()) / "douyin-fav-study-claude"
+    work.mkdir(exist_ok=True)  # 在空目录里跑，免得读到别处的 CLAUDE.md
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=max(timeout, 300), cwd=str(work),
+                               env=_clean_env(), creationflags=flags)
+        except subprocess.TimeoutExpired:
+            if attempt <= 1:
+                continue
+            raise LLMError("Claude Code 响应超时", retry=True)
+        out = (r.stdout or "").strip()
+        try:
+            data = json.loads(out.splitlines()[-1] if out else "")
+        except Exception:
+            raise LLMError(f"Claude Code 没有正常返回（退出码 {r.returncode}）：{(r.stderr or out)[:300]}",
+                           retry=True)
+        text = str(data.get("result") or "")
+        if data.get("is_error"):
+            low = text.lower()
+            if "not logged in" in low or "/login" in low:
+                raise LLMError("Claude Code 还没登录。请打开终端运行 claude，输入 /login 登录你的 Claude 账号后再试。")
+            if "limit" in low or "usage" in low:
+                raise LLMError(f"Claude 订阅额度暂时用完了：{text[:200]}", retry=True)
+            if attempt <= 2 and ("overloaded" in low or "529" in low or "500" in low):
+                time.sleep(5 * attempt)
+                continue
+            raise LLMError(f"Claude Code 报错：{text[:300]}", retry=True)
+        u = data.get("usage") or {}
+        used = sum(int(u.get(k) or 0) for k in ("input_tokens", "output_tokens",
+                                                  "cache_creation_input_tokens", "cache_read_input_tokens"))
+        return text, used
+
+
+def _codex_exe():
+    exe = shutil.which("codex")
+    if not exe:
+        for p in (Path(os.environ.get("APPDATA", "")) / "npm" / "codex.cmd", Path.home() / ".local" / "bin" / "codex"):
+            if p.exists():
+                return str(p)
+        raise LLMError("没找到 Codex（codex 命令）。请先安装：npm i -g @openai/codex，再运行 codex 登录你的 ChatGPT 账号。")
+    return exe
+
+
+def _codex_cli(cfg, messages, json_mode=True, timeout=120):
+    """用本机 Codex CLI（codex exec）调用，走你自己的 ChatGPT 订阅，不需要 API Key。只读沙箱、不改任何文件。"""
+    model = (cfg.get("model") or "").strip()
+    prompt = "\n\n".join(("【系统要求】\n" if m["role"] == "system" else "") + m["content"] for m in messages)
+    if json_mode:
+        prompt += "\n\n（只输出 JSON 对象本身，不要用代码块包裹，不要输出任何其他文字。）"
+    work = Path(tempfile.gettempdir()) / "douyin-fav-study-codex"
+    work.mkdir(exist_ok=True)
+    out = work / f"last_{os.getpid()}_{time.time_ns()}.txt"
+    cmd = [_codex_exe(), "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--output-last-message", str(out)]
+    if model and model != "default":
+        cmd += ["-m", model]
+    cmd.append("-")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=max(timeout, 300), cwd=str(work), creationflags=flags)
+    except subprocess.TimeoutExpired:
+        raise LLMError("Codex 响应超时", retry=True)
+    text = out.read_text(encoding="utf-8").strip() if out.exists() else ""
+    out.unlink(missing_ok=True)
+    if not text:
+        err = (r.stderr or r.stdout or "")[-300:]
+        if "login" in err.lower():
+            raise LLMError("Codex 还没登录。请打开终端运行 codex，按提示登录 ChatGPT 账号后再试。")
+        raise LLMError(f"Codex 没有正常返回（退出码 {r.returncode}）：{err}", retry=True)
+    m = re.search(r"tokens used[:\s]*([\d,]+)", r.stderr or "", re.I)
+    return text, int(m.group(1).replace(",", "")) if m else 0
+
+
 def parse_json(text: str) -> dict:
     t = (text or "").strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t)
-    try:
-        return json.loads(t)
-    except Exception:
-        a, b = t.find("{"), t.rfind("}")
-        if a >= 0 and b > a:
-            return json.loads(t[a:b + 1])
-        raise
+    a, b = t.find("{"), t.rfind("}")
+    cands = [t] + ([t[a:b + 1]] if a >= 0 and b > a else [])
+    err = None
+    for c in cands:
+        try:
+            return json.loads(c, strict=False)  # strict=False：字符串里直接换行 / 制表符也能读
+        except Exception as e:
+            err = err or e
+    raise err
 
 
 def _str_list(v):
@@ -264,6 +394,8 @@ SKIP_HINT = ("embed", "whisper", "tts", "dall-e", "image", "audio", "realtime", 
 def list_models(cfg):
     """向服务商要可用模型列表，返回模型 ID 列表（尽量只留聊天模型）。"""
     cfg = _as_cfg(cfg)
+    if cfg.get("kind") == "claude_cli":
+        return list(CLAUDE_CLI_MODELS)
     key = (cfg.get("api_key") or "").strip()
     base = (cfg.get("base_url") or "").strip().rstrip("/")
     if not key or not base:

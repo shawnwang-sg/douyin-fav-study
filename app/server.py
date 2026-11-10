@@ -12,8 +12,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import __version__, backup, config, db, deep, douyin, insights, llm, notes, ocr, transcribe, update, weekly
-from .worker import Worker, scan_inbox
+from . import __version__, backup, config, db, deep, douyin, insights, llm, notes, ocr, topics, transcribe, update, weekly, xhs, yuedu
+from .worker import Worker, import_folder, scan_inbox
 
 _DEPS = None
 
@@ -59,6 +59,47 @@ def reveal(p):
         subprocess.Popen(["open", "-R", p])
     else:
         subprocess.Popen(["xdg-open", str(Path(p).parent)])
+
+
+def _plat(b):
+    p = str((b or {}).get("platform") or "douyin")
+    return p if p in config.PLATFORMS else "douyin"
+
+
+def library_index():
+    """学习库（阅读版）目录：tab → 大类 → 小主题 → 篇。正文另取（/api/library/bodies），目录很轻。"""
+    t = yuedu.taxonomy()
+    rows = db.conn().execute(
+        "SELECT id,title,author,platform,media_type,local_path,url,duration,status,reason,category,starred,learned,"
+        "created_at,fav_at,note_json FROM items WHERE status IN ('done','skipped','irrelevant')").fetchall()
+    items, pending = [], []
+    for r in rows:
+        n = json.loads(r["note_json"] or "null") or {}
+        lp = r["local_path"] or ""
+        has_media = bool(lp) and os.path.exists(lp)
+        base = {"id": r["id"], "platform": r["platform"] or "douyin", "kind": r["media_type"] or "video",
+                "author": r["author"] or "", "orig": (r["title"] or "")[:80], "url": r["url"] or "",
+                "media": has_media, "is_dir": has_media and os.path.isdir(lp), "dur": r["duration"] or 0,
+                "starred": r["starred"], "learned": r["learned"], "t": r["fav_at"] or r["created_at"]}
+        if r["status"] == "done":
+            if n.get("mode") == "yuedu":
+                items.append({**base, "tab": n.get("tab") or r["category"] or "未分类",
+                              "cat": n.get("category") or "其他", "topic": n.get("topic") or "其他",
+                              "theme": n.get("theme") or r["title"] or "", "gold": n.get("gold") or "",
+                              "pct": n.get("change_pct"), "unsure": n.get("unsure") or 0, "old": False})
+            else:  # 旧版结构化笔记：也放进来，归到它原来的分类
+                items.append({**base, "tab": "旧版笔记", "cat": r["category"] or "其他", "topic": "",
+                              "theme": n.get("title") or r["title"] or "", "gold": n.get("summary") or "",
+                              "pct": None, "unsure": 0, "old": True})
+        elif n.get("mode") == "yuedu" or (r["reason"] or "").startswith(("没信息量", "其他", "几乎没有")):
+            pending.append({**base, "why": r["reason"] or "", "group": n.get("low_info_type") or
+                            ("其他（不整理）" if r["status"] == "irrelevant" else "没信息量")})
+    tabs = [x["name"] for x in t["tabs"]]
+    extra = sorted({i["tab"] for i in items} - set(tabs))
+    return {"tabs": [{"name": x["name"], "desc": x.get("desc", "")} for x in t["tabs"]]
+            + [{"name": e, "desc": ""} for e in extra],
+            "order": {tab: sorted(v, key=yuedu._cat_key) for tab, v in t["categories"].items()},
+            "items": items, "pending": pending, "platforms": config.PLATFORMS}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -149,6 +190,63 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _media(self, path):
+        """/media/<id> 播放这条的本地视频（支持拖动进度条）；/media/<id>/<图片名> 图文文件夹里的图片。"""
+        parts = path.split("/")
+        try:
+            it = db.get(int(parts[2]))
+        except (ValueError, IndexError):
+            it = None
+        lp = Path((it or {}).get("local_path") or "")
+        if not it or not lp.exists():
+            return self._err("本地文件不在了", 404)
+        if lp.is_dir():
+            if len(parts) < 4:  # 图文：列出图片
+                imgs = sorted(p.name for p in lp.iterdir() if p.suffix.lower() in
+                              (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"))
+                txt = lp / "正文.txt"
+                return self._json({"images": imgs, "text": txt.read_text(encoding="utf-8", errors="ignore")
+                                   if txt.exists() else ""})
+            f = (lp / urllib.parse.unquote(parts[3])).resolve()
+            if f.parent != lp.resolve() or not f.is_file():
+                return self._err("not found", 404)
+        else:
+            f = lp
+        size = f.stat().st_size
+        ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
+        if f.suffix.lower() == ".webp":
+            ctype = "image/webp"
+        start, end = 0, size - 1
+        rng = self.headers.get("Range")
+        if rng and rng.startswith("bytes="):
+            a, _, z = rng[6:].split(",")[0].partition("-")
+            if a:
+                start = int(a)
+                end = int(z) if z else size - 1
+            elif z:
+                start = max(0, size - int(z))
+            end = min(end, size - 1)
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        else:
+            self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.end_headers()
+        try:
+            with open(f, "rb") as fh:
+                fh.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = fh.read(min(left, 1024 * 512))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (ConnectionError, OSError):
+            pass  # 播放器拖动进度时会主动断开，正常
+
     def _send_file(self, f, ctype):
         size = f.stat().st_size
         self.send_response(200)
@@ -187,8 +285,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._static("index.html")
         if path == "/print":
             return self._static("print.html")
+        if path in ("/reader", "/library"):  # 学习库 = 阅读页（版面和 video-yuedu 的 yuedu.html 一样）
+            import importlib
+            from . import reader_build, reader_page, reader_topics
+            for m in (reader_page, reader_topics, reader_build):  # 页面代码每次打开时重新载入：改版面不用重启、不打断后台任务
+                importlib.reload(m)
+            body = reader_build.build().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
+        if path.startswith("/media/"):  # 本地视频库里的视频 / 图文图片（学习库里弹窗播放）
+            return self._media(path)
         if path.startswith("/files/"):  # 笔记目录里的图片（图文）
             rel = urllib.parse.unquote(path[len("/files/"):])
             lib = config.library_dir().resolve()
@@ -214,6 +327,9 @@ class Handler(BaseHTTPRequestHandler):
                 "worker": worker.state, "logs": list(worker.logs)[-80:], "stats": db.stats(),
                 "settings": config.public(s), "providers": config.PROVIDERS, "free_plans": config.FREE_PLANS,
                 "library_dir": str(config.library_dir()), "inbox_dir": str(config.INBOX_DIR),
+                "download_dir": str(config.download_dir()), "xhs_download_dir": str(config.download_dir("xhs")),
+                "platforms": config.PLATFORMS, "xhs_guard": xhs.guard_status(), "login": worker.login,
+                "downloads": worker.downloads[-50:][::-1], "download_counts": worker.download_counts(),
                 "asr": transcribe.engine_status(),
                 "ocr": ocr.status(), "version": __version__, "deps": deps_status(),
                 "progress": worker.prog.snapshot(
@@ -222,6 +338,22 @@ class Handler(BaseHTTPRequestHandler):
                 "insights": insight_runner.snapshot(),
                 "update": update.status(),
             })
+        if path == "/api/topics":
+            return self._json(topics.all_data())
+        if path == "/api/library":
+            return self._json(library_index())
+        if path == "/api/library/bodies":
+            ids = [int(x) for x in (q("ids") or "").split(",") if x.isdigit()][:300]
+            out = {}
+            for i in ids:
+                it = db.get(i)
+                if it:
+                    n = it.get("note") or {}
+                    out[i] = {"body": n.get("body") or "", "gold": n.get("gold") or "",
+                              "summary": n.get("summary") or "", "points": n.get("points") or [],
+                              "transcript": "" if n.get("body") else (it.get("transcript") or "")[:4000],
+                              "images": it.get("images") or [], "my_note": it.get("my_note") or ""}
+            return self._json(out)
         if path == "/api/graph":
             return self._json(insights.graph())
         if path == "/api/insights":
@@ -257,7 +389,8 @@ class Handler(BaseHTTPRequestHandler):
             learned = q("learned")
             return self._json(db.list_items(
                 status=q("status"), category=q("category"), q=(q("q") or "").strip() or None,
-                learned=None if learned in (None, "") else learned == "1", starred=q("starred") == "1"))
+                learned=None if learned in (None, "") else learned == "1", starred=q("starred") == "1",
+                limit=min(int(q("limit") or 1000), 5000)))
         if path.startswith("/api/items/"):
             parts = path.split("/")
             try:
@@ -304,13 +437,18 @@ class Handler(BaseHTTPRequestHandler):
         b = self._body()
 
         if path == "/api/links":
-            links = douyin.extract_links(b.get("text", ""))
+            links = douyin.extract_links(b.get("text", "")) + xhs.extract_links(b.get("text", ""))
             if not links:
-                return self._err("没在内容里找到抖音链接。请粘贴抖音「分享 → 复制链接」得到的内容。")
+                return self._err("没在内容里找到抖音或小红书链接。请粘贴「分享 → 复制链接」得到的内容。")
             added = 0
             for link in links:
-                vid, kind = douyin._match_id(link)
-                item_id, new = db.add("link", aweme_id=vid, url=link)
+                is_xhs = any(h in link for h in xhs.HOSTS) or len(link) == 24
+                vid, kind = (xhs._match_id(link) if len(link) != 24 else (link, "note")) if is_xhs \
+                    else douyin._match_id(link)
+                if is_xhs:
+                    xhs.remember(vid, link)
+                    kind = None  # 小红书链接分不出图文 / 视频，读到详情再定
+                item_id, new = db.add("link", aweme_id=vid, url=link, platform="xhs" if is_xhs else "douyin")
                 if new and kind == "note":
                     db.update(item_id, media_type="note")
                 elif not new:
@@ -326,6 +464,23 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/update/check":
             # 设置页的「检查更新」：马上去 GitHub 问一次
             return self._json(update.check(force=True))
+        if path == "/api/download":  # 仅下载：不进学习库，不转文字，不用 AI
+            links = douyin.extract_links(b.get("text", "")) + xhs.extract_links(b.get("text", ""))
+            if not links:
+                return self._err("没在内容里找到抖音链接。请粘贴抖音「分享 → 复制链接」得到的内容。")
+            return self._json({"found": len(links), "added": worker.add_downloads(links)})
+        if path == "/api/download/retry":
+            n = 0
+            for d in worker.downloads:
+                if d["status"] == "failed":
+                    d.update(status="queued", error="")
+                    n += 1
+            if n:
+                worker.submit("download")
+            return self._json({"retried": n})
+        if path == "/api/download/clear":
+            worker.downloads[:] = [d for d in worker.downloads if d["status"] in ("queued", "running")]
+            return self._json({"ok": True})
 
         if path == "/api/process":
             worker.submit("process")
@@ -337,14 +492,125 @@ class Handler(BaseHTTPRequestHandler):
             worker.stop()
             return self._json({"ok": True})
         if path == "/api/login":
-            worker.submit("login")
+            worker.submit("login", platform=_plat(b))
             return self._json({"ok": True})
         if path == "/api/sync":
             s = config.load()
+            plat = _plat(b)
             limit = int(b.get("limit") or s.get("sync_limit") or 50)
             config.save({"sync_limit": limit})
-            worker.submit("sync", kind=b.get("kind", "collection"), limit=limit, then_process=True)
+            kind = str(b.get("kind") or "collection")
+            config.save({"sync_kind": kind, "sync_download_only": bool(b.get("download_only")), "sync_platform": plat})
+            folder = folder_name = None
+            if kind.startswith("folder:"):  # 收藏夹里的某个分类 / 小红书专辑
+                folder = kind.split(":", 1)[1]
+                folders = s.get("xhs_folders" if plat == "xhs" else "folders") or []
+                folder_name = next((f["name"] for f in folders if f["id"] == folder), folder)
+                kind = "collection"
+            worker.submit("sync", kind=kind, limit=limit, then_process=True, folder=folder, platform=plat,
+                          folder_name=folder_name, download_only=bool(b.get("download_only")))
             return self._json({"ok": True})
+        if path == "/api/folders":
+            worker.submit("folders", platform=_plat(b))
+            return self._json({"ok": True})
+        if path == "/api/login/check":  # 只检查一次登录（不等待）；没登录会弹出登录窗口
+            plats = [p for p in (b.get("platforms") or ["douyin", "xhs"]) if p in config.PLATFORMS]
+            for p in plats:
+                worker.login[p] = {"ok": None, "t": time.time(), "msg": "排队检查中…"}
+            worker.request_login_check(plats, reopen=bool(b.get("reopen")))
+            return self._json({"ok": True, "busy": worker.state.get("busy"), "task": worker.state.get("task")})
+        if path == "/api/weekly/sync":  # 一键：过去一周的新收藏 → 下载进本地视频库 → 转文字 → 润色 → 周报
+            plats = [p for p in (b.get("platforms") or ["douyin", "xhs"]) if p in config.PLATFORMS]
+            if b.get("full"):  # 按月：最近 30 天的收藏完整过一遍
+                worker.submit("weekly_sync", platforms=plats, days=int(b.get("days") or 30), full=True)
+            else:
+                worker.submit("weekly_sync", platforms=plats, days=int(config.load().get("weekly_days") or 7))
+            return self._json({"ok": True})
+        if path == "/api/library/purge":  # 回收站「彻底删除」：删记录和笔记，元信息留底，以后同步 / 代刷都不会再加回来
+            from . import reader_build
+            from .worker import remember_purged
+            ids, n = {int(i) for i in b.get("ids") or []}, 0
+            for i in ids:
+                it = db.get(i)
+                if not it:
+                    continue
+                remember_purged(it)
+                topics.forget_item(i)
+                _delete_item(it)  # 删记录 + 笔记，作品 ID 记进 ignored_ids（视频文件不动）
+                n += 1
+            reader_build.save_deleted([x for x in reader_build.deleted_ids() if int(x) not in ids])
+            return self._json({"n": n})
+        if path == "/api/highlights":  # 学习库里选中文字 → 高亮 / 取消高亮
+            try:
+                (topics.hl_add if b.get("op") == "add" else topics.hl_remove)(b["item_id"], b.get("text"))
+            except topics.TopicError as e:
+                return self._err(str(e))
+            return self._json({"ok": True})
+        if path == "/api/topics":  # 专题整理：分类树、专题、专题里的视频、复制到桌面
+            op = b.get("op")
+            try:
+                if op == "node_create":
+                    return self._json({"id": topics.node_create(b.get("parent_id"), b.get("name"))})
+                if op == "node_rename":
+                    topics.node_rename(b["id"], b.get("name"))
+                elif op == "node_delete":
+                    topics.node_delete(b["id"])
+                elif op == "topic_create":
+                    return self._json({"id": topics.topic_create(b.get("node_id"), b.get("name"))})
+                elif op == "topic_rename":
+                    topics.topic_rename(b["id"], b.get("name"))
+                elif op == "topic_delete":
+                    topics.topic_delete(b["id"])
+                elif op == "feed":  # 代刷：抖音 / 小红书搜索 → 新视频进专题和学习库
+                    t = next((x for x in topics.all_data()["topics"] if x["id"] == int(b["topic_id"])), None)
+                    if not t:
+                        return self._err("找不到这个专题")
+                    kw = str(b.get("keyword") or t["name"]).strip()
+                    n = max(1, min(int(b.get("n") or 5), 30))
+                    plats = [p for p in (b.get("platforms") or ["douyin", "xhs"]) if p in config.PLATFORMS]
+                    worker.request_topic_feed(topic_id=t["id"], keyword=kw, n=n, platforms=plats)
+                    return self._json({"ok": True, "busy": worker.state.get("busy"), "task": worker.state.get("task")})
+                elif op == "note":
+                    return self._json({"saved_at": topics.topic_note(b["topic_id"], b.get("text"))})
+                elif op == "add":
+                    return self._json({"added": topics.items_add(b["topic_id"], b.get("ids") or [])})
+                elif op == "remove":
+                    topics.items_remove(b["topic_id"], b.get("ids") or [])
+                elif op == "copy":
+                    r = topics.copy_to_desktop(b["topic_id"])
+                    if b.get("open", True):
+                        try:
+                            open_path(Path(r["dir"]))
+                        except Exception:
+                            pass
+                    return self._json(r)
+                else:
+                    return self._err("未知操作")
+            except topics.TopicError as e:
+                return self._err(str(e))
+            return self._json({"ok": True})
+        if path == "/api/library/deleted":
+            from . import reader_build
+            reader_build.save_deleted(b.get("ids") or [])
+            return self._json({"ok": True})
+        if path == "/api/library/import_old":
+            return self._json(yuedu.import_old(db, log=worker.log))
+        if path == "/api/taxonomy":
+            t = b.get("taxonomy")
+            if isinstance(t, dict) and isinstance(t.get("tabs"), list):
+                yuedu.save_taxonomy(t)
+            return self._json(yuedu.taxonomy())
+        if path == "/api/import_folder":
+            folder = str(b.get("path") or "").strip().strip('"')
+            limit = int(b.get("limit") or 0) or None
+            config.save({"import_dir": folder, "auto_extract": not bool(b.get("transcribe_only"))})
+            try:
+                r = import_folder(folder, limit=limit, include_notes=bool(b.get("include_notes", True)))
+            except ValueError as e:
+                return self._err(str(e))
+            if r["ids"]:
+                worker.submit("process", ids=r["ids"])
+            return self._json({"added": r["added"], "existing": r["existing"], "total": len(r["ids"])})
         if path == "/api/inbox":
             n = scan_inbox()
             if n:
@@ -357,6 +623,13 @@ class Handler(BaseHTTPRequestHandler):
                     open_path(config.library_dir())
                 elif what == "inbox":
                     open_path(config.INBOX_DIR)
+                elif what == "downloads":
+                    open_path(config.download_dir())
+                elif what == "download":
+                    job = next((d for d in worker.downloads if d["id"] == int(b.get("id") or 0)), None)
+                    if not job or not job.get("path") or not Path(job["path"]).exists():
+                        return self._err("文件不见了，可能被移走或删除了")
+                    reveal(job["path"])
                 elif what == "item":
                     it = db.get(int(b.get("id")))
                     if it and it.get("md_path") and Path(it["md_path"]).exists():
@@ -533,6 +806,19 @@ class Handler(BaseHTTPRequestHandler):
             except llm.LLMError as e:
                 return self._err(str(e))
 
+        if path == "/api/items/batch":  # 已跳过：整组加入整理 / 整组删除
+            act, n = b.get("action"), 0
+            if act not in ("force_include", "delete"):
+                return self._err("未知操作")
+            for i in b.get("ids") or []:
+                it = db.get(int(i))
+                if not it:
+                    continue
+                (_force_include if act == "force_include" else _delete_item)(it)
+                n += 1
+            if act == "force_include" and n:
+                worker.submit("process")
+            return self._json({"n": n})
         if path.startswith("/api/items/") and path.endswith("/action"):
             try:
                 item_id = int(path.split("/")[3])
@@ -550,6 +836,9 @@ class Handler(BaseHTTPRequestHandler):
                     db.update(item_id, status="done", note=it["note"], md_path=path_, reason=None)
                     return self._json(db.get(item_id))
                 db.update(item_id, status="queued", attempts=0, reason=None)
+                worker.submit("process")
+            elif act == "force_include":  # 跳过的条目：用户看过原视频，要加入整理
+                _force_include(it)
                 worker.submit("process")
             elif act == "learned":
                 v = bool(b.get("value", True))
@@ -570,8 +859,7 @@ class Handler(BaseHTTPRequestHandler):
                     if it["status"] == "done":
                         db.update(item_id, md_path=notes.write(it))
             elif act == "delete":
-                notes.remove(it, with_images=True)
-                db.delete(item_id)
+                _delete_item(it)
                 return self._json({"deleted": True})
             else:
                 return self._err("未知操作")
@@ -580,9 +868,28 @@ class Handler(BaseHTTPRequestHandler):
         return self._err("not found", 404)
 
 
+def _force_include(it):
+    from .worker import FORCE_MARK
+    fields = dict(status="queued", attempts=0, reason=FORCE_MARK)
+    if any(k in (it.get("reason") or "") for k in ("转写太乱", "待重转", "质量极差")):
+        fields.update(transcript=None, segments=None)  # 转写太乱的：重新转写
+    db.update(it["id"], **fields)
+
+
+def _delete_item(it):
+    """删学习台里的记录（文件不动）；记下作品 ID，以后同步收藏时当成「已经有」，不再加回来。"""
+    notes.remove(it, with_images=True)
+    u = it.get("uid") or db.make_uid(it.get("platform"), it.get("aweme_id"), it.get("local_path"))
+    if u:  # 存 uid：作品 ID 带平台；本地导入的按文件指纹，换位置再导入也认得
+        from .worker import ignore_ids
+        ignore_ids([u])
+    db.delete(it["id"])
+
+
 def serve(port=8765, open_browser=True):
     global worker
     db.init()
+    topics.init()
     worker = Worker()
     global deep_runner
     deep_runner = deep.DeepRunner(worker.log)

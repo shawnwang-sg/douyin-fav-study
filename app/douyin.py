@@ -4,6 +4,7 @@
 登录态保存在 data/browser 里。之后程序打开视频页或收藏页，网页自己会去请求视频数据，
 程序只是"旁听"这些数据，不自己伪造签名，所以比直接调接口稳定。
 """
+import json
 import random
 import re
 import time
@@ -24,6 +25,80 @@ ID_PATTERNS = [
     (re.compile(r"iesdouyin\.com/share/note/(\d{8,})"), "note"),
     (re.compile(r"[?&](?:modal_id|aweme_id|vid)=(\d{8,})"), "video"),
 ]
+
+
+_PW = {}  # 线程 → [playwright, 用它的浏览器个数]。同一线程只能起一个 sync Playwright，抖音、小红书窗口共用
+
+
+def pw_acquire():
+    import threading
+    from playwright.sync_api import sync_playwright
+    k = threading.get_ident()
+    if k not in _PW:
+        _PW[k] = [sync_playwright().start(), 0]
+    _PW[k][1] += 1
+    return _PW[k][0]
+
+
+def pw_release(pw):
+    for k, v in list(_PW.items()):
+        if v[0] is pw:
+            v[1] -= 1
+            if v[1] <= 0:
+                _PW.pop(k, None)
+                try:
+                    pw.stop()
+                except Exception:
+                    pass
+            return
+
+
+# 搜索结果页上画出来的视频卡片：/video/<作品ID> 的链接（图文是 /note/，不要）
+_SEARCH_DOM_JS = r"""() => {
+  const out = [], seen = new Set();
+  for (const a of document.querySelectorAll('a[href*="/video/"]')) {
+    const m = a.href.match(/\/video\/(\d{15,22})/);
+    if (!m || seen.has(m[1])) continue;
+    seen.add(m[1]);
+    const box = a.closest('li, [class*="card"], [class*="item"]') || a;
+    const t = (box.innerText || a.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const au = box.querySelector('[class*="author"], [class*="name"]');
+    out.push({id: m[1], title: t.sort((x, y) => y.length - x.length)[0] || '', author: au ? au.textContent.trim().replace(/^@/, '') : ''});
+  }
+  return out;
+}"""
+
+
+def _dom_video(x):
+    vid = str(x.get("id"))
+    return {"aweme_id": vid, "title": (x.get("title") or f"抖音视频 {vid}")[:200], "desc": "", "author": x.get("author") or "",
+            "duration": 0, "cover": None, "play_urls": [], "hq_urls": [], "subtitle_urls": [], "is_ad": False,
+            "is_note": False, "images": [], "url": f"https://www.douyin.com/video/{vid}"}
+
+
+def _search_debug(platform, page, url, urls, n):
+    """代刷搜索的诊断：页面截图 + 看到的带 search 的请求地址，方便查「搜到 0 条」是怎么回事。"""
+    try:
+        from .config import DATA
+        page.screenshot(path=str(DATA / f"_search_{platform}.png"))
+        (DATA / f"_search_{platform}.json").write_text(json.dumps(
+            {"t": time.strftime("%Y-%m-%d %H:%M:%S"), "url": url, "page_url": page.url, "got": n, "requests": urls},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _cursor_time(c):
+    """收藏列表接口的 cursor 是时间戳（微秒 / 毫秒 / 秒都见过），换成秒；不像时间就返回 None。"""
+    try:
+        c = int(c)
+    except (TypeError, ValueError):
+        return None
+    for div in (1_000_000, 1_000, 1):
+        t = c / div
+        if 1_400_000_000 < t < 4_000_000_000:
+            return t
+    return None
 
 
 class DouyinError(Exception):
@@ -106,6 +181,57 @@ def _https(u):
     return "https:" + u if u.startswith("//") else u
 
 
+_PACE_PUSH = re.compile(r'self\.__pace_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)')
+
+
+def _snake(o):
+    """网页里的数据是驼峰命名（urlList），接口是下划线（url_list）；统一成下划线好复用 parse_aweme。"""
+    if isinstance(o, dict):
+        return {re.sub(r"(?<!^)(?=[A-Z])", "_", k).lower(): _snake(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_snake(x) for x in o]
+    return o
+
+
+def _ssr_note(html: str, aweme_id: str):
+    """从图文页的 HTML 里取出服务端渲染的作品数据（self.__pace_f 里那段），整理成接口格式。
+
+    只认带图片的作品；视频页的结构不一样，仍然走 detail 接口。取不到返回 None。
+    """
+    for m in _PACE_PUSH.finditer(html or ""):
+        s = json.loads(m.group(1))
+        if '"aweme":{' not in s or aweme_id not in s:
+            continue
+        v = json.loads(s[s.index(":") + 1:])
+        det = next((x.get("aweme") or {} for x in v if isinstance(x, dict) and x.get("aweme")), {}).get("detail")
+        if not det or str(det.get("awemeId")) != str(aweme_id) or not det.get("images"):
+            return None
+        a = _snake({k: det[k] for k in ("awemeId", "desc", "awemeType", "images", "isAds", "authorInfo")
+                    if k in det})
+        a["author"] = a.pop("author_info", None) or {}
+        a["video"] = {}
+        for img in a["images"]:
+            img.pop("video", None)  # 实况照片里的小视频，用不上
+        return a
+    return None
+
+
+def _hq_urls(video: dict, fallback: list) -> list:
+    """「仅下载」用：优先 H.264（各种播放器都能放），同编码里码率高的在前；都失败再用普通地址。"""
+    out = []
+
+    def h265(b):
+        return bool(b.get("is_h265") or b.get("is_bytevc1")) or "265" in str(b.get("format") or "") \
+            or "bytevc1" in str(b.get("format") or "")
+
+    for br in sorted(video.get("bit_rate") or [], key=lambda b: (h265(b), -(b.get("bit_rate") or 0))):
+        for u in (br.get("play_addr") or {}).get("url_list") or []:
+            u = _https(u)
+            if u and u.startswith("http") and u not in out:
+                out.append(u)
+    return out + [u for u in fallback if u not in out]
+
+
 def parse_aweme(a: dict) -> dict:
     """把抖音返回的一条视频数据整理成我们需要的字段。"""
     video = a.get("video") or {}
@@ -166,6 +292,7 @@ def parse_aweme(a: dict) -> dict:
         "duration": round(dur / 1000, 1) if dur > 1000 else dur,
         "cover": cover,
         "play_urls": urls,
+        "hq_urls": _hq_urls(video, urls),
         "subtitle_urls": subs,
         "is_ad": bool(a.get("is_ads") or a.get("raw_ad_data")),
         "is_note": is_note,
@@ -199,7 +326,7 @@ class Browser:
             from playwright.sync_api import sync_playwright
         except ImportError:
             raise DouyinError("缺少 playwright 组件：安装没有完成。请关掉程序，重新运行安装脚本（推荐 Python 3.12），看到「安装完成」再启动")
-        self.pw = sync_playwright().start()
+        self.pw = pw_acquire()
         errors = []
         for ch in self._channels():
             try:
@@ -226,7 +353,7 @@ class Browser:
                           "或在终端运行 `python -m playwright install chromium`。\n" + "\n".join(errors))
 
     def close(self):
-        for fn in (lambda: self.ctx and self.ctx.close(), lambda: self.pw and self.pw.stop()):
+        for fn in (lambda: self.ctx and self.ctx.close(), lambda: self.pw and pw_release(self.pw)):
             try:
                 fn()
             except Exception:
@@ -241,6 +368,25 @@ class Browser:
                     return True
         except Exception:
             pass
+        return False
+
+    def check_login(self, prompt=True) -> bool:
+        """只检查一次登录状态，不等待；没登录就把窗口提到最前面、点开扫码登录（只点第一次）。"""
+        self.start()
+        if not self.page.url.startswith("https://www.douyin.com"):
+            self.page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=60000)
+            self.page.wait_for_timeout(1500)
+        if self.logged_in():
+            self._prompted = False
+            return True
+        if prompt:
+            try:
+                self.page.bring_to_front()
+                if not getattr(self, "_prompted", False):
+                    self._prompted = True
+                    self.page.get_by_text("登录", exact=True).first.click(timeout=5000)
+            except Exception:
+                pass
         return False
 
     def ensure_login(self, timeout=300, should_stop=lambda: False):
@@ -278,8 +424,16 @@ class Browser:
 
         self.page.on("response", on_resp)
         try:
-            self.page.goto(f"https://www.douyin.com/{'note' if kind == 'note' else 'video'}/{aweme_id}",
-                           wait_until="domcontentloaded", timeout=60000)
+            resp = self.page.goto(f"https://www.douyin.com/{'note' if kind == 'note' else 'video'}/{aweme_id}",
+                                  wait_until="domcontentloaded", timeout=60000)
+            # 图文页不走 detail 接口，数据直接写在网页里；先从网页里取，取到了就不用干等
+            ssr = None
+            try:
+                ssr = _ssr_note(resp.text() if resp else "", aweme_id)
+            except Exception:
+                pass
+            if ssr:
+                return parse_aweme(ssr)
             detail = None
             for _ in range(40):  # 最多等 20 秒
                 while hits and detail is None:
@@ -441,10 +595,20 @@ class Browser:
                     lst = j.get("aweme_list")
                     if lst is None:
                         continue
+                    if not getattr(self, "_raw_saved", False):  # 留一份原始数据，看接口里有没有收藏时间
+                        try:
+                            from .config import DATA as _D
+                            (_D / "_raw_douyin_collect.json").write_text(json.dumps({"url": r.url, "keys": list(j), "data_keys": list((j.get("data") or {}) if isinstance(j.get("data"), dict) else {}), "sample": {"cursor": j.get("cursor"), "has_more": j.get("has_more"), "first": lst[:2]}}, ensure_ascii=False, indent=1)[:200000], encoding="utf-8")
+                            self._raw_saved = True
+                        except Exception:
+                            pass
                     if j.get("has_more") in (0, False):
                         has_more = False
+                    fav_time = _cursor_time(j.get("cursor"))  # 收藏列表的 cursor = 这一页最后一条的收藏时间
                     for a in lst:
                         d = parse_aweme(a)
+                        if fav_time and kind != "like":
+                            d["fav_time"] = fav_time
                         if d["aweme_id"] and d["aweme_id"] not in seen and len(seen) < limit:
                             seen.add(d["aweme_id"])
                             new += 1
@@ -463,7 +627,7 @@ class Browser:
                 if seen:
                     self.log(f"备用方式读到 {len(seen)} 条。抖音可能改版了，如果之后一直要用备用方式，"
                              "到「设置 → 版本与更新」看看有没有新版本。")
-            if not seen:
+            if not seen and not should_stop():
                 raise DouyinError(f"没读到「{tab_text}」列表（接口和网页备用方式都没读到）。"
                                   f"如果{tab_text}列表不是空的，多半是弹了验证或者抖音改版了")
             return len(seen)
@@ -520,3 +684,140 @@ class Browser:
             except Exception:
                 pass
             self.page.wait_for_timeout(random.randint(1500, 2500))
+    # ---- 收藏夹里的分类（用户自己建的收藏夹）
+    _API_JS = """async ([path, params]) => {
+      const q = new URLSearchParams(Object.assign({device_platform: 'webapp', aid: '6383', channel: 'channel_pc_web',
+        pc_client_type: '1', version_code: '170400', version_name: '17.4.0', cookie_enabled: 'true'}, params));
+      const r = await fetch(path + '?' + q.toString(), {credentials: 'include'});
+      const t = await r.text();
+      try { return {status: r.status, json: JSON.parse(t)}; } catch (e) { return {status: r.status, text: t.slice(0, 200)}; }
+    }"""
+
+    def _api(self, path, params):
+        """在抖音网页里用你自己的登录状态调接口，返回 JSON。"""
+        r = self.page.evaluate(self._API_JS, [path, {k: str(v) for k, v in params.items()}]) or {}
+        j = r.get("json")
+        if not isinstance(j, dict):
+            raise DouyinError(f"抖音接口没有正常返回（HTTP {r.get('status')}）：{(r.get('text') or '')[:100]}")
+        if j.get("status_code") not in (0, None):
+            raise DouyinError(f"抖音接口报错：{j.get('status_msg') or j.get('status_code')}")
+        return j
+
+    def _open_self(self, should_stop=lambda: False):
+        self.ensure_login(should_stop=should_stop)
+        self.page.goto("https://www.douyin.com/user/self?showTab=favorite_collection",
+                       wait_until="domcontentloaded", timeout=60000)
+        self.page.wait_for_timeout(2000)
+
+    def search(self, keyword, limit=30, on_item=lambda d: None, should_stop=lambda: False):
+        """用抖音网页版的搜索（视频）搜关键词，和人手动搜一样：打开搜索页，慢慢往下滚，旁听结果接口。返回读到的条数。"""
+        import urllib.parse
+        self.ensure_login(should_stop=should_stop)
+        url = f"https://www.douyin.com/search/{urllib.parse.quote(keyword)}?type=video"
+        match = lambda u: "/aweme/v1/web/search/item" in u or "/aweme/v1/web/general/search" in u
+        hits, seen, urls = [], set(), []
+
+        def on_resp(r):
+            if "search" in r.url and len(urls) < 80:
+                urls.append(r.url[:220])
+            if match(r.url):
+                hits.append(r)
+
+        def take(d):
+            if d["aweme_id"] not in seen and len(seen) < limit:
+                seen.add(d["aweme_id"])
+                on_item(d)
+                return 1
+            return 0
+
+        def dom_cards():  # 网页上已经画出来的结果（有时第一页直接写在网页里，不走接口）
+            try:
+                return [_dom_video(x) for x in (self.page.evaluate(_SEARCH_DOM_JS) or [])]
+            except Exception:
+                return []
+
+        self.page.on("response", on_resp)
+        try:
+            self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            self.page.wait_for_timeout(3500)
+            # 页面上还没有结果（要验证 / 要登录 / 加载慢）：把窗口提到前面等你处理，每 5 秒看一次，最多等 10 分钟
+            waited = 0
+            while not hits and not dom_cards() and waited < 600 and not should_stop():
+                if not waited:
+                    self.log("代刷：抖音搜索页还没出结果。如果弹出的浏览器窗口里要验证或登录，请完成一下，"
+                             "完成后会自动接着搜（每 5 秒看一次，最多等 10 分钟）。")
+                    try:
+                        self.page.bring_to_front()
+                    except Exception:
+                        pass
+                self.page.wait_for_timeout(5000)
+                waited += 5
+            idle, has_more = 0, True
+            while len(seen) < limit and idle < 6 and has_more and not should_stop():
+                new = 0
+                for d in dom_cards():
+                    new += take(d)
+                    if should_stop():
+                        break
+                while hits:
+                    r = hits.pop(0)
+                    try:
+                        j = r.json()
+                    except Exception:
+                        continue
+                    if j.get("has_more") in (0, False):
+                        has_more = False
+                    for x in j.get("data") or []:
+                        a = (x or {}).get("aweme_info") or {}
+                        if not a.get("aweme_id"):
+                            continue
+                        new += take(parse_aweme(a))
+                        if should_stop():
+                            break
+                idle = 0 if new else idle + 1
+                try:
+                    self.page.mouse.move(640, 560)
+                    self.page.mouse.wheel(0, random.randint(1800, 2800))
+                except Exception:
+                    pass
+                self.page.wait_for_timeout(random.randint(1500, 2600))  # 慢一点，别被风控
+            return len(seen)
+        finally:
+            self.page.remove_listener("response", on_resp)
+            _search_debug("douyin", self.page, url, urls, len(seen))
+
+    def list_folders(self, should_stop=lambda: False):
+        """返回收藏夹分类列表 [{"id", "name", "count"}]。"""
+        self._open_self(should_stop)
+        out, cursor = [], 0
+        for _ in range(20):
+            j = self._api("/aweme/v1/web/collects/list/", {"cursor": cursor, "count": 20})
+            for f in j.get("collects_list") or []:
+                out.append({"id": str(f.get("collects_id_str") or f.get("collects_id")),
+                            "name": f.get("collects_name") or "未命名", "count": int(f.get("total_number") or 0)})
+            if not j.get("has_more"):
+                break
+            cursor = j.get("cursor") or len(out)
+            self.page.wait_for_timeout(800)
+        return out
+
+    def sync_folder(self, folder_id, limit=50, on_item=lambda d: None, should_stop=lambda: False):
+        """读取某个收藏夹分类里的作品（从最新开始），每条调用 on_item。返回读到的条数。
+
+        已删除 / 设为私密的作品抖音不会返回，所以读到的可能比收藏夹显示的数量少。
+        """
+        self._open_self(should_stop)
+        seen, cursor = set(), 0
+        while len(seen) < limit and not should_stop():
+            j = self._api("/aweme/v1/web/collects/video/list/",
+                          {"collects_id": folder_id, "cursor": cursor, "count": 20})
+            for a in j.get("aweme_list") or []:
+                d = parse_aweme(a)
+                if d["aweme_id"] and d["aweme_id"] not in seen and len(seen) < limit:
+                    seen.add(d["aweme_id"])
+                    on_item(d)
+            if not j.get("has_more"):
+                break
+            cursor = j.get("cursor") or 0
+            self.page.wait_for_timeout(random.randint(1200, 2200))  # 慢一点，别被风控
+        return len(seen)

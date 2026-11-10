@@ -6,21 +6,33 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data"
+# 数据目录：默认是程序目录下的 data/；设环境变量 FAVSTUDY_DATA 可以换到别处（比如跑一份演示数据）
+DATA = Path(os.environ.get("FAVSTUDY_DATA") or (ROOT / "data")).expanduser()
 DB_PATH = DATA / "library.db"
 SETTINGS_PATH = DATA / "settings.json"
 MEDIA_DIR = DATA / "media"          # 临时视频，转录完即删
 INBOX_DIR = DATA / "inbox"          # 手动放进来的本地视频
 MODELS_DIR = DATA / "models"        # Whisper 模型缓存
 BROWSER_DIR = DATA / "browser"      # 抖音登录态（浏览器配置目录）
+XHS_BROWSER_DIR = DATA / "browser_xhs"  # 小红书登录态（和抖音分开，互不影响）
 DEFAULT_LIBRARY = DATA / "知识库"    # Markdown 笔记（可当 Obsidian 库打开）
+DEFAULT_DOWNLOADS = Path.home() / "Videos" / "抖音下载"  # 「仅下载」保存的位置
+DEFAULT_XHS_DOWNLOADS = Path.home() / "Videos" / "小红书下载"
 
-for d in (DATA, MEDIA_DIR, INBOX_DIR, MODELS_DIR, BROWSER_DIR):
+PLATFORMS = {"douyin": "抖音", "xhs": "小红书"}
+
+for d in (DATA, MEDIA_DIR, INBOX_DIR, MODELS_DIR, BROWSER_DIR, XHS_BROWSER_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # AI 服务商预设。kind=openai 走 OpenAI 兼容的 /chat/completions；kind=anthropic 走 Claude 原生接口。
 # 模型名各家会更新，设置页里可以随时改。
 PROVIDERS = {
+    # 本机 Claude Code（claude -p）：走你自己的 Claude 订阅额度，不需要 API Key
+    "claude_cli": {"name": "Claude Code（本机订阅，免 Key）", "base_url": "local://claude-code", "model": "sonnet",
+                   "kind": "claude_cli", "no_key": True, "key_url": "", "models": ["sonnet", "opus", "haiku"]},
+    # 本机 Codex CLI（codex exec）：走你自己的 ChatGPT 订阅额度，不需要 API Key
+    "codex_cli": {"name": "Codex（本机 ChatGPT 订阅，免 Key）", "base_url": "local://codex", "model": "default",
+                  "kind": "codex_cli", "no_key": True, "key_url": "", "models": ["default", "gpt-5.5", "gpt-5.5-mini"]},
     "anthropic": {"name": "Claude（Anthropic）", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-5-5",
                   "key_url": "https://console.anthropic.com/settings/keys", "kind": "anthropic",
                   "models": ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"]},
@@ -91,11 +103,33 @@ DEFAULTS = {
     "asr_engine": "auto",               # auto / mlx / faster —— auto：苹果芯片 Mac 用 mlx，其他用 faster-whisper
     "mlx_model": "mlx-community/whisper-large-v3-turbo",
     "whisper_model": "small",           # faster-whisper 用：tiny / base / small / medium
+    "asr_workers": 4,                   # 同时转几条（本地文件并行转写；在线视频仍一条一条来）
+    "old_yuedu_libs": [],               # 以前用 video-yuedu 整理过的本地库（导入旧阅读稿用），如 ["D:/douyin"]
+    "asr_lane_roots": [],               # 按库分路：如 ["D:/douyin", "D:/xiaohongshu"]，第 k 路优先转第 k % N 个库，没有了再帮别的库
     "use_subtitles": True,              # 视频自带字幕时直接用字幕，跳过下载和转写
     "use_hf_mirror": False,             # 在中国大陆时勾选：用 hf-mirror.com 下载模型
     "max_minutes": 15,                  # 超长视频只转录前 N 分钟
     "library_dir": "",                  # 留空 = 程序目录下的 data/知识库
-    "keep_video": False,                # 转录完是否保留视频文件
+    "keep_video": True,                 # 处理过的视频留在本地视频库（学习库里随时能看原视频）
+    "skip_long": True,                  # 超过 max_minutes 的视频整条跳过（不只截前 N 分钟）
+    "auto_extract": True,              # False = 只转文字，转好后停在「待提炼」，手动点「提炼」
+    "import_dir": "",                   # 上次「导入本地文件夹」用的文件夹
+    "download_dir": "",                 # 抖音视频库（下载位置），空 = 默认（视频\抖音下载）
+    "xhs_download_dir": "",             # 小红书视频库，空 = 默认（视频\小红书下载）
+    "xhs_folders": [],                  # 小红书收藏专辑缓存
+    "xhs_folders_at": 0,
+    "sync_platform": "douyin",          # 上次同步选的平台：douyin / xhs
+    "xhs_delay": [4, 9],                # 小红书每读一条详情之间随机歇几秒（防风控）
+    "xhs_daily_cap": 400,               # 小红书每天最多读多少条详情，超过就停到第二天（防封号）
+    "web_parse_fallback": True,         # XHS-Downloader 读不到 / 限流时，用网页解析站（kukutool，免登录、不付费）兜底
+    "refine_mode": "yuedu",             # yuedu = 保留原话润色排版（改动 ≤15%）；notes = 旧的结构化学习笔记
+    "max_change_pct": 15,               # 润色改动上限（%）
+    "weekly_days": 7,                   # 「整理这一周」往回看几天的收藏
+    "last_weekly_sync": 0,
+    "folders": [],                      # 收藏夹分类缓存 [{"id", "name", "count"}]
+    "folders_at": 0,
+    "sync_kind": "collection",          # 上次同步选的列表：collection / like / folder:<id>
+    "sync_download_only": False,
     "browser": "auto",                  # auto / msedge / chrome / chromium
     "sync_limit": 50,                   # 每次同步收藏夹最多读多少条
     # ---- 精读（「有人带着读」）：可以和日常提炼用不同的模型
@@ -172,7 +206,7 @@ def public(s: dict) -> dict:
     out = dict(s)
     for field in ("api_key", "deep_api_key"):
         k = out.pop(field, "") or ""
-        out[field + "_set"] = bool(k)
+        out[field + "_set"] = bool(k) or _uses_cli(s, "deep" if field == "deep_api_key" else "main")
         out[field + "_hint"] = ("••••" + k[-4:]) if len(k) >= 4 else ""
     out.pop("timing", None)
     out["default_deep_prompt"] = DEFAULT_DEEP_PROMPT
@@ -197,7 +231,45 @@ def llm_cfg(s, purpose="main"):
         cfg = {"provider": s.get("provider"), "base_url": s.get("base_url"),
                "model": s.get("model"), "api_key": s.get("api_key")}
     cfg["kind"] = provider_kind(cfg["provider"], cfg["base_url"])
+    if cfg["kind"] in ("claude_cli", "codex_cli") and not (cfg.get("api_key") or "").strip():
+        cfg["api_key"] = "local-subscription"  # 占位：本机订阅不需要 Key，让各处的「填了 Key 没有」检查通过
     return cfg
+
+
+def _uses_cli(s, purpose="main"):
+    if purpose == "deep" and not s.get("deep_same", True):
+        return provider_kind(s.get("deep_provider"), s.get("deep_base_url")) in ("claude_cli", "codex_cli")
+    return provider_kind(s.get("provider"), s.get("base_url")) in ("claude_cli", "codex_cli")
+
+
+def download_dir(platform="douyin") -> Path:
+    s = load()
+    if platform == "xhs":
+        p = Path(s.get("xhs_download_dir") or DEFAULT_XHS_DOWNLOADS).expanduser()
+    else:
+        p = Path(s.get("download_dir") or DEFAULT_DOWNLOADS).expanduser()
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def platform_of(aweme_id="", local_path=""):
+    """按作品 ID / 本地路径判断是哪个平台：小红书笔记 ID 是 24 位十六进制，抖音是纯数字。"""
+    import re
+    if aweme_id and re.fullmatch(r"[0-9a-f]{24}", str(aweme_id)):
+        return "xhs"
+    if aweme_id and str(aweme_id).isdigit():
+        return "douyin"
+    if local_path:
+        lp = os.path.normcase(str(local_path))
+        try:
+            xr = os.path.normcase(str(download_dir("xhs")))
+            if lp.startswith(xr.rstrip("/" + os.sep) + os.sep):
+                return "xhs"
+        except Exception:
+            pass
+        if "xiaohongshu" in lp or "小红书" in lp:
+            return "xhs"
+    return "douyin"
 
 
 def library_dir() -> Path:

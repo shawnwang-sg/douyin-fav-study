@@ -548,6 +548,10 @@ iframe.mindmap { width: 100%; height: 540px; border: 0; border-radius: var(--r-c
 /* ---------------------------------------------------------------- 每周周报 */
 .week-nav { gap: 6px; }
 .streak-card { display: flex; gap: 18px; align-items: center; margin-bottom: 16px; }
+.weekly-sync { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+details.fold > summary { cursor: pointer; padding: 6px 4px; list-style: none; }
+details.fold > summary::before { content: "▸ "; }
+details.fold[open] > summary::before { content: "▾ "; }
 .streak-ic { width: 52px; height: 52px; border-radius: 16px; background: var(--warn-soft); color: var(--warn); display: grid; place-items: center; flex: none; }
 .streak-ic .ic { width: 28px; height: 28px; }
 .streak-n { font-size: 19px; font-weight: 600; }
@@ -601,3 +605,19 @@ iframe.mindmap { width: 100%; height: 540px; border: 0; border-radius: var(--r-c
 .banner .fix { color: inherit; opacity: .92; }
 @media (max-width: 900px) { .ob-topics { grid-template-columns: repeat(2, 1fr); } .ob-finish { flex-wrap: wrap; } }
 .err-detail { white-space: pre-wrap; word-break: break-all; font: 12px/1.5 var(--mono); margin: 6px 0 0; }
+.login-list { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 8px; }
+.login-list li { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--line, #e5e5e5); border-radius: 12px; }
+.login-list li b { min-width: 4em; }
+.login-list .st { font-size: 13px; }
+.login-list .ok { color: #2e7d32; } .login-list .bad { color: #c62828; } .login-list .wait { color: var(--ink-3); }
+#lgMsg.warn { color: #c62828; }
+.login-list li .btn { margin-left: auto; }
+.btn.danger { background: #d32f2f; border-color: #d32f2f; color: #fff; }
+.btn.danger:hover { background: #b71c1c; border-color: #b71c1c; }
+#loginModal .modal-foot .spacer { flex: 1; }
+
+details.skipgrp { border: 1px solid var(--line, #e5e5e5); border-radius: 12px; padding: 4px 12px; margin: 8px 0; }
+details.skipgrp > summary { cursor: pointer; padding: 8px 0; list-style: none; }
+details.skipgrp > summary::before { content: "▸ "; color: var(--ink-3); }
+details.skipgrp[open] > summary::before { content: "▾ "; }
+details.skipgrp > summary .grp-acts { float: right; display: inline-flex; gap: 6px; }

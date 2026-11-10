@@ -13,7 +13,7 @@ import urllib.request
 
 from . import __version__, config
 
-REPO = "yuanshengbo8-sketch/douyin-fav-study"
+REPO = "shawnwang-sg/douyin-fav-study"  # 本分支：检查更新看这个仓库的 Releases（原项目的安装包不含本分支的功能）
 RELEASES_URL = f"https://github.com/{REPO}/releases"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 LATEST_PAGE = f"https://github.com/{REPO}/releases/latest"

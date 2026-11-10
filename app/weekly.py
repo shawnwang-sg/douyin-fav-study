@@ -60,7 +60,11 @@ def report(offset=0):
         return {"id": it["id"], "title": n.get("title") or it.get("title") or "未命名",
                 "category": it.get("category") or "其他", "learned": bool(it.get("learned"))}
 
-    new = [it for it in items if inside(it.get("created_at"))]
+    new = [it for it in items if inside(it.get("fav_at") or it.get("created_at"))]
+    # 这一周新收藏的（不管有没有整理完），按平台数
+    fav_new = Counter(r["platform"] or "douyin" for r in db.conn().execute(
+        "SELECT platform FROM items WHERE COALESCE(fav_at, created_at) >= ? AND COALESCE(fav_at, created_at) < ?",
+        (start, end)).fetchall())
     learned = [it for it in items if inside(it.get("learned_at"))]
     deep = [it for it in items if inside((it.get("deep") or {}).get("created_at"))]
     quizzes, checks, asks = [], 0, 0
@@ -99,6 +103,8 @@ def report(offset=0):
         "suggest": [brief(it) for it in backlog[:3]],
         "unlearned": len(backlog),
         "has_any": bool(new or learned or deep or quizzes or checks or asks),
+        "fav_new": dict(fav_new),
+        "last_monthly": config.load().get("last_monthly_sync"), "last_sync": config.load().get("last_weekly_sync") or 0,
     }
 
 
