@@ -307,15 +307,12 @@ document.addEventListener('click',e=>{const m=e.target.closest('mark.hl');if(!m|
 document.addEventListener('scroll',hideBar,{passive:true});
 async function copyText(t){try{await navigator.clipboard.writeText(t)}catch(e){const ta=document.createElement('textarea');ta.value=t;
  document.body.append(ta);ta.select();document.execCommand('copy');ta.remove()}}
-// 摘抄格式：出处写一次、放在上面（只要标题，太长就截短），同一条视频连着摘的句子都归在这个出处下面，不重复写
-function srcHead(info){let s=info.title.replace(/\s+/g,' ').trim()||'无题';if(s.length>16)s=s.slice(0,16)+'…';return `【${s}】`}
+// 摘抄格式：只放摘的那段话，不写出处标题；来自哪篇文章由后台记着（note_quotes 表）
 async function addToNote(tid,info,prefix=''){const t=topic(tid);if(!t)return;
- const head=srcHead(info),quote='> '+info.text.trim().replace(/\n+/g,'\n> ');
+ const quote='> '+info.text.trim().replace(/\n+/g,'\n> ');
  const cur=(t.note||'').replace(/\s*$/,'');
- // 笔记末尾是不是同一个出处下的摘抄（出处那行之后只有「> 」开头的行）：是就接着往下写
- const m=cur.match(/(^|\n)(【[^\n]*】)((?:\n> [^\n]*)*)$/);
- const text=(m&&m[2]===head)?cur+'\n'+quote:cur+(cur?'\n\n':'')+head+'\n'+quote;
- const r=await post({op:'note',topic_id:tid,text});t.note=text;t.note_at=r.saved_at;
+ const text=cur+(cur?'\n\n':'')+quote;
+ const r=await post({op:'note',topic_id:tid,text,quote:{item_id:info.id,text:info.text.trim()}});t.note=text;t.note_at=r.saved_at;
  if(TP.cur===tid&&$('#tpnote')){$('#tpnote').value=text;$('#tpnst').textContent='已保存 '+new Date(r.saved_at*1000).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'})}
  toast(`${prefix}已加入「${t.name}」的笔记`)}
 let pendingNote=null;

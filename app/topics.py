@@ -25,6 +25,9 @@ def init():
     """)
     c.execute("CREATE TABLE IF NOT EXISTS highlights(id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL, text TEXT NOT NULL, "
               "created_at REAL)")  # 学习库里划线高亮的句子
+    # 专题笔记里的摘抄是从哪篇文章来的：笔记正文里不写出处，来源记在这张表里
+    c.execute("CREATE TABLE IF NOT EXISTS note_quotes(id INTEGER PRIMARY KEY, topic_id INTEGER NOT NULL, item_id INTEGER NOT NULL, "
+              "text TEXT NOT NULL, created_at REAL)")
     cols = {r["name"] for r in c.execute("PRAGMA table_info(topics)")}
     if "note" not in cols:  # 每个专题的配套笔记（随手记）
         c.execute("ALTER TABLE topics ADD COLUMN note TEXT DEFAULT ''")
@@ -132,7 +135,16 @@ def topic_note(topic_id, text):
     return now
 
 
+def quote_add(topic_id, item_id, text):
+    """记下「这段摘抄来自哪篇文章」（笔记正文里不写出处）。"""
+    text = str(text or "").strip()[:2000]
+    if text:
+        _commit("INSERT INTO note_quotes(topic_id,item_id,text,created_at) VALUES(?,?,?,?)",
+                (int(topic_id), int(item_id), text, time.time()))
+
+
 def topic_delete(topic_id):
+    _commit("DELETE FROM note_quotes WHERE topic_id=?", (int(topic_id),))
     _commit("DELETE FROM topic_items WHERE topic_id=?", (int(topic_id),))
     _commit("DELETE FROM topics WHERE id=?", (int(topic_id),))
 
@@ -160,6 +172,7 @@ def forget_item(item_id):
     """条目被彻底删除：从所有专题里拿掉，高亮也删掉。"""
     _commit("DELETE FROM topic_items WHERE item_id=?", (int(item_id),))
     _commit("DELETE FROM highlights WHERE item_id=?", (int(item_id),))
+    _commit("DELETE FROM note_quotes WHERE item_id=?", (int(item_id),))
 
 
 # ---------------------------------------------------------------- 高亮

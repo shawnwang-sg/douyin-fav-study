@@ -1229,8 +1229,12 @@ let weeklyDue = null;
 (async () => {
   await refreshState();
   try { weeklyDue = await api("/api/weekly/due"); $("#navWeekly").hidden = !weeklyDue.due; } catch {}
-  // 新手引导没做完先去引导页；否则先到「添加与处理」（轻），学习库是整页，点了再加载
-  if (!location.hash) location.hash = guideActive() ? "#/start" : "#/process";
+  // 新手引导没做完先去引导页；否则首页就是学习库（其他页面都从学习库顶部的导航进）
+  if (!location.hash) {
+    if (!guideActive()) { location.replace("/reader"); return; }
+    location.hash = "#/start";
+  }
+  document.documentElement.style.visibility = "";
   render();
   startPolling();
 })();

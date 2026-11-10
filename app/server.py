@@ -1,8 +1,10 @@
 """本地网页服务：只监听 127.0.0.1，只有你自己的电脑能打开。"""
+import hashlib
 import json
 import mimetypes
 import shutil
 import tempfile
+import threading
 import traceback
 import os
 import platform
@@ -66,8 +68,54 @@ def _plat(b):
     return p if p in config.PLATFORMS else "douyin"
 
 
+# ---------------------------------------------------------- 学习库整页的缓存
+# 生成一次要读全库、排几千篇文章；数据没变就直接用上次的。判断「没变」看：条目数 + 最后修改时间、
+# 有没有人点过会改数据的按钮（任何 POST）、分类表 / 回收站文件、本地视频文件夹、页面代码本身。
+_reader = {"sig": None, "body": b"", "etag": "", "dirs": [], "src": None}
+_reader_lock = threading.Lock()
+_gen = 0  # 每来一次 POST 加一：高亮、专题、回收站这些不一定改条目表
+
+
+def _mtimes(paths):
+    out = []
+    for p in paths:
+        try:
+            out.append(os.stat(p).st_mtime_ns)
+        except OSError:
+            out.append(0)
+    return tuple(out)
+
+
+def reader_page_cached():
+    """返回 (整页 bytes, etag)。"""
+    import importlib
+    from . import fsindex, reader_build, reader_extra, reader_page, reader_topics
+    mods = (reader_page, reader_topics, reader_extra, reader_build)
+    with _reader_lock:
+        src = _mtimes([m.__file__ for m in mods])
+        if _reader["src"] is not None and src != _reader["src"]:
+            for m in mods:  # 页面代码改了才重新载入：改版面不用重启、不打断后台任务
+                importlib.reload(m)
+        n, last = db.conn().execute("SELECT COUNT(*), MAX(updated_at) FROM items").fetchone()
+        files = [yuedu.TAXONOMY_PATH, reader_build.DELETED_PATH]
+        for lib in yuedu.old_libs():
+            files += [lib / "_yuedu" / "deleted.json", lib / "_yuedu" / "topics.json"]
+        sig = (src, _gen, n, last, _mtimes(files), int(reader_build.week_start()),
+               fsindex.dir_stamp(_reader["dirs"]))
+        if sig != _reader["sig"]:
+            fs = fsindex.FsIndex()
+            body = reader_build.build(fs).encode("utf-8")
+            dirs = fs.dirs()
+            sig = sig[:-1] + (fsindex.dir_stamp(dirs),)
+            _reader.update(sig=sig, body=body, dirs=dirs, src=src,
+                           etag='"%s"' % hashlib.sha1(repr(sig).encode()).hexdigest()[:20])
+        return _reader["body"], _reader["etag"]
+
+
 def library_index():
     """学习库（阅读版）目录：tab → 大类 → 小主题 → 篇。正文另取（/api/library/bodies），目录很轻。"""
+    from .fsindex import FsIndex
+    fs = FsIndex()
     t = yuedu.taxonomy()
     rows = db.conn().execute(
         "SELECT id,title,author,platform,media_type,local_path,url,duration,status,reason,category,starred,learned,"
@@ -75,11 +123,11 @@ def library_index():
     items, pending = [], []
     for r in rows:
         n = json.loads(r["note_json"] or "null") or {}
-        lp = r["local_path"] or ""
-        has_media = bool(lp) and os.path.exists(lp)
+        kind = fs.kind(r["local_path"] or "")
+        has_media = bool(kind)
         base = {"id": r["id"], "platform": r["platform"] or "douyin", "kind": r["media_type"] or "video",
                 "author": r["author"] or "", "orig": (r["title"] or "")[:80], "url": r["url"] or "",
-                "media": has_media, "is_dir": has_media and os.path.isdir(lp), "dur": r["duration"] or 0,
+                "media": has_media, "is_dir": kind == "dir", "dur": r["duration"] or 0,
                 "starred": r["starred"], "learned": r["learned"], "t": r["fav_at"] or r["created_at"]}
         if r["status"] == "done":
             if n.get("mode") == "yuedu":
@@ -286,15 +334,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/print":
             return self._static("print.html")
         if path in ("/reader", "/library"):  # 学习库 = 阅读页（版面和 video-yuedu 的 yuedu.html 一样）
-            import importlib
-            from . import reader_build, reader_page, reader_topics
-            for m in (reader_page, reader_topics, reader_build):  # 页面代码每次打开时重新载入：改版面不用重启、不打断后台任务
-                importlib.reload(m)
-            body = reader_build.build().encode("utf-8")
+            body, etag = reader_page_cached()  # 数据没变就用上次生成的
+            if self.headers.get("If-None-Match") == etag:  # 浏览器手里的那份还是最新的：不用再传 9MB
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -323,8 +374,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             update.maybe_check()
             s = config.load()
+            stats = db.stats()
             return self._json({
-                "worker": worker.state, "logs": list(worker.logs)[-80:], "stats": db.stats(),
+                "worker": worker.state, "logs": list(worker.logs)[-80:], "stats": stats,
                 "settings": config.public(s), "providers": config.PROVIDERS, "free_plans": config.FREE_PLANS,
                 "library_dir": str(config.library_dir()), "inbox_dir": str(config.INBOX_DIR),
                 "download_dir": str(config.download_dir()), "xhs_download_dir": str(config.download_dir("xhs")),
@@ -333,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
                 "asr": transcribe.engine_status(),
                 "ocr": ocr.status(), "version": __version__, "deps": deps_status(),
                 "progress": worker.prog.snapshot(
-                    max(0, db.stats()["by_status"].get("queued", 0))),
+                    max(0, stats["by_status"].get("queued", 0))),
                 "deep": deep_runner.snapshot(),
                 "insights": insight_runner.snapshot(),
                 "update": update.status(),
@@ -432,6 +484,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         u = urllib.parse.urlparse(self.path)
         path = u.path
+        if path != "/api/library/deleted":  # 回收站存在 deleted.json 里，缓存看它的修改时间就够了
+            global _gen
+            _gen += 1  # 可能改了数据：学习库整页的缓存下次重新生成
         if path == "/api/restore":
             return self._restore_upload(urllib.parse.parse_qs(u.query).get("dry", ["0"])[0] == "1")
         b = self._body()
@@ -571,7 +626,11 @@ class Handler(BaseHTTPRequestHandler):
                     worker.request_topic_feed(topic_id=t["id"], keyword=kw, n=n, platforms=plats)
                     return self._json({"ok": True, "busy": worker.state.get("busy"), "task": worker.state.get("task")})
                 elif op == "note":
-                    return self._json({"saved_at": topics.topic_note(b["topic_id"], b.get("text"))})
+                    saved = topics.topic_note(b["topic_id"], b.get("text"))
+                    q = b.get("quote")  # 这次是从哪篇文章摘的：笔记里不写出处，记在这里
+                    if isinstance(q, dict) and q.get("item_id"):
+                        topics.quote_add(b["topic_id"], q["item_id"], q.get("text"))
+                    return self._json({"saved_at": saved})
                 elif op == "add":
                     return self._json({"added": topics.items_add(b["topic_id"], b.get("ids") or [])})
                 elif op == "remove":

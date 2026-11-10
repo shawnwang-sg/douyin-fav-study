@@ -136,6 +136,9 @@ def init():
             if u and not conn().execute("SELECT 1 FROM items WHERE uid=?", (u,)).fetchone():
                 conn().execute("UPDATE items SET uid=? WHERE id=?", (u, r["id"]))
         conn().execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_uid ON items(uid) WHERE uid IS NOT NULL")
+        # 状态栏每几秒统计一次：有了这两个索引只读索引、不用扫整张表（表里有文字稿，几十 MB）
+        conn().execute("CREATE INDEX IF NOT EXISTS idx_items_stats ON items(status, category, learned, starred)")
+        conn().execute("CREATE INDEX IF NOT EXISTS idx_items_updated ON items(updated_at)")
         # 程序上次被强制关掉时，卡在中间状态的条目放回队列
         conn().execute(
             f"UPDATE items SET status='queued' WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE)

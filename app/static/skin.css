@@ -1,0 +1,121 @@
+/* 和学习库（/reader）同一套风格：米色纸面 + 棕色强调色、宋体标题、顶部一行文字导航。
+   这份样式排在 style.css 后面，只换配色、字体和页面骨架，各页面的功能和结构不动。
+   配色取自 reader_page.py 的 CSS（--bg / --fg / --mut / --card / --line / --acc / --q）。 */
+:root {
+  --paper: #f7f4ee; --card: #fffdf9; --fill: #f1ebe0; --fill-2: #ebe4d6; --fill-3: #e0d7c6;
+  --ink: #24211c; --ink-2: #4a443b; --ink-3: #6f685d; --ink-4: #948c80;
+  --line: #e6dfd3; --line-strong: #d3c9b8;
+  --accent: #9a5b2a; --link: #9a5b2a; --accent-soft: #f3e7d8; --on-accent: #fffdf9;
+  --teal: #9a5b2a; --teal-soft: #f3e7d8;
+  --ok: #3d7a3a; --ok-soft: #e6f0df; --ok-ink: #2f6a2d;
+  --warn: #9a5a00; --warn-soft: #fbefd9;
+  --bad: #b3261e; --bad-soft: #fbe9e6;
+  --gold: #d9a400;
+  --hover-shadow: 0 2px 10px rgba(60, 40, 20, .1);
+  --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+  --r-card: 12px; --r-in: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #181614; --card: #211e1b; --fill: #2a2622; --fill-2: #322d28; --fill-3: #3d3731;
+    --ink: #ebe6dd; --ink-2: #cfc8bc; --ink-3: #a69f94; --ink-4: #8a8378;
+    --line: #38332d; --line-strong: #4a443c;
+    --accent: #e0a46b; --link: #e0a46b; --accent-soft: rgba(224, 164, 107, .16); --on-accent: #181614;
+    --teal: #e0a46b; --teal-soft: rgba(224, 164, 107, .16);
+    --ok: #7fc77a; --ok-soft: rgba(127, 199, 122, .14); --ok-ink: #7fc77a;
+    --warn: #e9b949; --warn-soft: rgba(233, 185, 73, .13);
+    --bad: #f0867c; --bad-soft: rgba(240, 134, 124, .14);
+    --gold: #e0a800;
+    --hover-shadow: 0 2px 10px rgba(0, 0, 0, .4);
+  }
+}
+::selection { background: var(--accent-soft); }
+
+/* ---------------------------------------------------------------- 骨架：侧栏变成顶部一行导航（和学习库的 .topbar 一样） */
+.shell { display: block; max-width: 1680px; margin: 0 auto; padding: 28px 32px 100px; min-height: 0; }
+.side { position: static; height: auto; overflow: visible; background: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+  border: 0; padding: 0; margin: -8px 0 14px; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 18px; font-size: 14px; }
+.brand { padding: 0; }
+.mark, .brand-sub { display: none !important; }
+.brand-name { font-weight: 700; font-size: 14px; letter-spacing: .04em; color: var(--ink); }
+.nav { flex-direction: row; flex-wrap: wrap; flex: none; gap: 4px 18px; }
+.nav svg { display: none; }
+.nav > a { padding: 0; border-radius: 0; gap: 6px; font-size: 14px; color: var(--ink-3); background: none !important; }
+.nav > a:hover { color: var(--accent); }
+.nav > a.on { color: var(--ink); font-weight: 600; }
+.nav > a:focus-visible { border-radius: 4px; }
+.nav-bottom { order: 3; flex: none; border: 0; padding: 0; }
+.side-foot { order: 2; margin-left: auto; border: 0; padding: 0; font-size: 12px; white-space: nowrap; color: var(--ink-3);
+  max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+.side-foot.busy { color: var(--accent); }
+.pill { background: var(--accent); color: var(--on-accent); margin-left: 0; }
+.main { padding: 0; max-width: 1280px; }
+@media (max-width: 900px) {
+  .shell { padding: 20px 16px 80px; }
+  .side { flex-wrap: wrap; padding: 0; border: 0; gap: 4px 14px; }
+  .nav { overflow: visible; flex-wrap: wrap; }
+  .main { padding: 0; }
+}
+
+/* ---------------------------------------------------------------- 字体：标题和正文内容用宋体，控件用黑体（和学习库一样） */
+h1 { font: 700 30px/1.3 var(--serif); letter-spacing: .06em; margin: 0 0 4px; }
+h2 { font-family: var(--serif); letter-spacing: .02em; }
+.note h1 { font-size: 30px; line-height: 1.4; letter-spacing: .02em; }
+.note section h2, #view > section > h2 { color: var(--accent); }
+.summary, .points li, .steps li, .transcript, .tseg, .ocr-text, .ol-item, .cons-list p, .cons-head b, .a-ai, .feedback,
+.mynote textarea { font-family: var(--serif); }
+.summary { line-height: 1.95; }
+.head .muted { font-size: 14px; }
+
+/* ---------------------------------------------------------------- 卡片：细描边、12px 圆角 */
+.card, .wtile, .kv div, .ol-item, .quiz .q, .summary, .points, .steps, .transcript, .logs, .tsegs, .ocr-row, .sk-card,
+table.anki, .a-ai, .mynote textarea { border: 1px solid var(--line); }
+.modal-card { border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, .22); }
+.modal { background: rgba(0, 0, 0, .35); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.vcard { border: 1px solid var(--line); }
+.vcard:hover { transform: none; }
+
+/* ---------------------------------------------------------------- 按钮：描边胶囊；主按钮是棕色实心 */
+.btn { border: 1px solid var(--line-strong); background: var(--card); color: var(--ink); padding: 7px 18px; }
+.btn:hover { background: var(--card); color: var(--accent); border-color: var(--accent); }
+.btn.sm { padding: 4px 13px; }
+.btn.primary, .btn.accent { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn.primary:hover, .btn.accent:hover { background: var(--accent); color: var(--on-accent); filter: brightness(1.1); }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--link); }
+.btn.ghost:hover { background: var(--accent-soft); border-color: transparent; }
+.btn.danger { color: var(--bad); border-color: var(--bad); }
+.btn.danger:hover { background: var(--bad); color: var(--card); border-color: var(--bad); }
+.btn:disabled { color: var(--ink-3); border-color: var(--line); }
+.icon { background: var(--fill); }
+.link, .back { color: var(--link); }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 分段控件、标签页 */
+.seg { background: var(--fill-2); border-radius: 999px; }
+.seg button, .seg a { border-radius: 999px; }
+.seg button.on, .seg a.on { background: var(--card); box-shadow: 0 0 0 1px var(--line); }
+@media (prefers-color-scheme: dark) { .seg button.on, .seg a.on { background: var(--fill-3); } }
+.tabs button.on { border-bottom-color: var(--accent); }
+
+/* ---------------------------------------------------------------- 输入框：聚焦时棕色描边 */
+.search { background: var(--card); border: 1px solid var(--line); border-radius: 999px; }
+.search:focus, .mynote textarea:focus { background: var(--card); box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+.panels textarea:focus, .field input:focus, .field select:focus, .field textarea:focus, .cq textarea:focus, .modal-card textarea:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.inbox-box { color: var(--ink-3); }
+
+/* ---------------------------------------------------------------- 压在强调色上的字：用纸色，深色模式下才看得清 */
+.step.now, .points li::before, .q-me, .ts-btn:hover { color: var(--on-accent); }
+.bar, .wtrack { background: var(--fill-2); }
+.spinner { border-color: var(--fill-3); border-top-color: var(--accent); }
+.es-art { box-shadow: none; background: var(--accent-soft); }
+.aside .cover-lg, .vcard .cover { background: var(--fill); }
+iframe.mindmap { border: 1px solid var(--line); }
+
+/* 提示条、轻提示 */
+.banner { border-radius: 12px; border: 1px solid var(--line); }
+.banner.info { background: var(--accent-soft); color: var(--ink); }
+.toast { background: var(--ink); color: var(--paper); backdrop-filter: none; -webkit-backdrop-filter: none; border-radius: 10px; }
+.logs { background: var(--card); }
+.gsvg { background: var(--fill); }
+.streak-ic { border-radius: 12px; }
