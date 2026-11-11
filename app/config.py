@@ -125,6 +125,8 @@ DEFAULTS = {
     "xhs_delay": [4, 9],                # 小红书每读一条详情之间随机歇几秒（防风控）
     "xhs_daily_cap": 400,               # 小红书每天最多读多少条详情，超过就停到第二天（防封号）
     "web_parse_fallback": True,         # XHS-Downloader 读不到 / 限流时，用网页解析站（kukutool，免登录、不付费）兜底
+    "xhs_use_login_cookie": False,      # 读笔记详情时要不要把浏览器的登录 Cookie 带给 XHS-Downloader；默认不带（带了容易把登录顶掉）
+    "xhs_site": "",                     # 这个网络打开小红书落在哪个站：xiaohongshu.com / rednote.com（海外）。程序自己记，下次直接去
     "refine_mode": "yuedu",             # yuedu = 保留原话润色排版（改动 ≤15%）；notes = 旧的结构化学习笔记
     "max_change_pct": 15,               # 润色改动上限（%）
     "weekly_days": 7,                   # 「整理这一周」往回看几天的收藏

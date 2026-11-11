@@ -260,8 +260,11 @@ def detail(note_id, url=None):
     br = _free.get()
     try:
         target = note_url(note_id, url)
-        # 登录后的 Cookie + 没有 xsec_token 的链接，小红书会不给数据；不带 Cookie 反而能读到公开笔记
-        d = br.extract(target, _saved_cookie() if "xsec_token" in target else "")
+        # 默认不带登录 Cookie：带 xsec_token 的链接不登录就能读到（实测）。把浏览器里的登录 Cookie 拿给另一个程序用，
+        # 等于同一个登录从两个不同的「设备」发请求——轻则这一步读不到、退回去开浏览器弹登录框，重则登录被顶掉。
+        # 只有设置里明确打开 xhs_use_login_cookie 才带。
+        use = "xsec_token" in target and config.load().get("xhs_use_login_cookie")
+        d = br.extract(target, _saved_cookie() if use else "")
     except DouyinError as e:
         if "JSONDecodeError" in str(e):  # 小红书给了空页面：多半被限流，接下来 30 分钟不再直连
             _direct_off_until = time.time() + 1800
@@ -447,6 +450,14 @@ _PAGE_NOTE_JS = r"""(id) => {
 }"""
 
 
+def pick_site(has, pref=None):
+    """先去哪个站：只有一个站有登录就去那个；两个都有 / 都没有，就去上次落在的那个（pref），再不行去 xiaohongshu.com。"""
+    logged = [k for k in ("xiaohongshu.com", "rednote.com") if (has or {}).get(k)]
+    if len(logged) == 1:
+        return logged[0]
+    return pref if pref in ("xiaohongshu.com", "rednote.com") else "xiaohongshu.com"
+
+
 class Browser:
     """保存了登录态的真实浏览器窗口。只能在同一个线程里使用。读笔记详情不需要它。"""
 
@@ -516,20 +527,70 @@ class Browser:
         return bool(u.get("loggedIn") and u.get("userId") and not u.get("guest"))
 
     def _goto_home(self):
+        """去小红书首页，并认定「这台电脑现在用哪个站」（self.origin），之后所有地址都用它。
+
+        小红书有两个站：xiaohongshu.com 和 rednote.com（海外网络打开前者会被跳到后者），两边的登录不通用。
+        以前每次都先去 xiaohongshu.com：在海外网络上会被跳到 rednote.com，那边如果没登录就又要扫码，
+        扫一次就多一个新的网页登录。现在先去「上次落在的那个站 / 有登录的那个站」，能不换站就不换站。"""
         if not self.page.url.startswith(("https://www.xiaohongshu.com", "https://www.rednote.com")):
-            self.page.goto("https://www.xiaohongshu.com/explore", wait_until="domcontentloaded", timeout=60000)
+            site = pick_site(self.site_logins(), config.load().get("xhs_site"))
+            self.page.goto(self.SITES[site], wait_until="domcontentloaded", timeout=60000)
             self.page.wait_for_timeout(2500)
+        self._note_origin()
+
+    def _note_origin(self):
         m = re.match(r"https://[^/]+", self.page.url)
         if m:
-            self.origin = m.group(0)  # 海外网络会跳到 rednote.com，后面都用同一个域名
+            self.origin = m.group(0)
+            site = self._site()
+            if config.load().get("xhs_site") != site:  # 记住这个网络落在哪个站，下次直接去
+                config.save({"xhs_site": site})
+
+    def _try_other_site(self):
+        """当前站没登录、另一个站有登录：去另一个站看一次（换了网络可能就不会再被跳走）。返回现在所在的站。"""
+        site, has = self._site(), self.site_logins()
+        other = next((k for k in self.SITES if k != site), None)
+        if other and has.get(other):
+            try:
+                self.page.goto(self.SITES[other], wait_until="domcontentloaded", timeout=60000)
+                self.page.wait_for_timeout(2500)
+            except Exception:
+                pass
+            if self._site() != site:
+                self.log(f"小红书：{site} 没登录，{other} 有登录，已切到 {other}。")
+                self._sess0 = None
+            else:
+                self.log(f"小红书：登录是在 {other} 上的，但这个网络打开它会被跳回 {site}，所以要在 {site} 上再登录一次"
+                         f"（只需要这一次；之后都用 {site}）。")
+        self._note_origin()
+        return self._site()
 
     def _save_cookie(self):
+        """把登录 Cookie 存一份给 XHS-Downloader 用——只有设置里打开 xhs_use_login_cookie 才存（默认不存、不用）。"""
+        if not config.load().get("xhs_use_login_cookie"):
+            return
         try:
             cs = [c for c in self.ctx.cookies() if "xiaohongshu.com" in c.get("domain", "")]
             if cs:
                 COOKIE_PATH.write_text("; ".join(f"{c['name']}={c['value']}" for c in cs), encoding="utf-8")
         except Exception:
             pass
+
+    def _dismiss_login(self):
+        """只是读公开笔记时不需要登录：页面自己弹出的登录框关掉，免得让人以为又要扫码（多扫一次就多一个网页登录）。"""
+        try:
+            hit = self.page.evaluate("""() => {
+              const box = document.querySelector('.login-container, .login-modal, [class*="login-container"], [class*="login-modal"]');
+              if (!box) return '';
+              const x = box.querySelector('.close-button, .close-icon, [class*="close"]');
+              if (x) { x.click(); return 'closed'; }
+              return 'found';
+            }""")
+            if hit == "found":
+                self.page.keyboard.press("Escape")
+            return bool(hit)
+        except Exception:
+            return False
 
     SITES = {"xiaohongshu.com": "https://www.xiaohongshu.com/explore", "rednote.com": "https://www.rednote.com/explore"}
 
@@ -591,22 +652,9 @@ class Browser:
                 pass
         has = self.site_logins()
         if not self.logged_in():
-            other = next((k for k in self.SITES if k != site), None)
-            if other and has.get(other):
-                try:
-                    self.page.goto(self.SITES[other], wait_until="domcontentloaded", timeout=60000)
-                    self.page.wait_for_timeout(2500)
-                except Exception:
-                    pass
-                if self._site() != site:
-                    self.log(f"小红书：{site} 没登录，{other} 有登录，已切到 {other}。")
-                    self._sess0 = None
-                else:
-                    self.log(f"小红书：想切到 {other}，又被跳回 {site}（看网络 / 代理）。")
+            self._try_other_site()
         site = self._site()
-        m = re.match(r"https://[^/]+", self.page.url)
-        if m:
-            self.origin = m.group(0)
+        self._note_origin()
         ok = self.logged_in()
         self.last_check = {"site": site, "has": has, "ok": ok}
         if ok:
@@ -630,21 +678,22 @@ class Browser:
     def ensure_login(self, timeout=1800, should_stop=lambda: False):
         self._open()
         self._goto_home()
+        if not self.logged_in():
+            self._try_other_site()  # 另一个站有登录就先去那边看看，别急着让人再扫一次码
         if self.logged_in():
             self._save_cookie()
-            self.log("小红书已经是登录状态，登录信息已保存。浏览器窗口先留着。")
+            self.log(f"小红书（{self._site()}）已经是登录状态。浏览器窗口先留着。")
             return True
-        self.log("请在弹出的浏览器窗口里用小红书 App 扫码登录（左侧「登录」）。最多等 30 分钟，不着急……")
+        site = self._site()
+        self.log(f"请在弹出的浏览器窗口里用小红书 App 扫码登录 {site}（左侧「登录」）。只需要扫这一次，最多等 30 分钟，不着急……")
         try:
             self.page.bring_to_front()
             self.page.get_by_text("登录", exact=True).first.click(timeout=5000)
         except Exception:
             pass
-        def session():
-            try:
-                return next((c["value"] for c in self.ctx.cookies() if c["name"] == "web_session"), "")
-            except Exception:
-                return ""
+
+        def session():  # 只看当前这个站的 web_session（两个站各有一份，混着看会判断错）
+            return self._session(site)
 
         first = session()
         end = time.time() + timeout
@@ -702,13 +751,16 @@ class Browser:
         """在登录好的浏览器窗口里打开笔记页，从网页数据里读详情（和人手动打开一样）。"""
         self._open()
         _before_hit()
-        target = note_url(note_id, url)
-        if self.origin and target.startswith("https://www.xiaohongshu.com"):
-            target = self.origin + target[len("https://www.xiaohongshu.com"):]
+        if not getattr(self, "_origin_known", False):  # 先弄清这个网络用哪个站，笔记页直接开在那个站上，不来回跳
+            self._goto_home()
+            self._origin_known = True
+            self.log("小红书窗口里如果弹出登录框，不用管它：读公开笔记、下载视频都不需要登录（程序会自己关掉）。")
+        target = re.sub(r"^https://www\.(?:xiaohongshu|rednote)\.com", self.origin, note_url(note_id, url))
         self.page.goto(target, wait_until="domcontentloaded", timeout=60000)
         n = None
         for _ in range(10):
             self.page.wait_for_timeout(1000)
+            self._dismiss_login()
             n = self.page.evaluate(_PAGE_NOTE_JS, note_id)
             if n:
                 break

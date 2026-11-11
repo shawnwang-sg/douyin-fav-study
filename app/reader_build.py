@@ -33,11 +33,14 @@ JS = _JS.replace(
     # 回收站里写清楚原来在哪：分类 › 大类 › 小主题（恢复就回到那里）；代刷来的标「代刷」
     """function where(el){if(el.tagName==='ARTICLE'){const s=el.closest('section.tab'),b=$(`.tabs button[data-tab="${s.id}"]`);
  return '阅读 · '+(b?b.firstChild.textContent:'')}return '待处理'}""",
-    """function where(el){if(el.tagName==='ARTICLE'){const s=el.closest('section.tab'),b=$(`.tabs button[data-tab="${s.id}"]`);
+    # 没进阅读版正文的（没信息量 / 不整理的）：写「没进正文 › 原因」，不写「待处理」——它们不是还没做完的任务
+    """function where(el){const sr=typeof PRE_SEARCH!=='undefined'&&PRE_SEARCH.includes(+el.dataset.id)?'代刷 · ':'';
+ if(el.tagName==='ARTICLE'){const s=el.closest('section.tab'),b=$(`.tabs button[data-tab="${s.id}"]`);
  let h2='',h3='';for(let n=el.previousElementSibling;n;n=n.previousElementSibling){if(!h3&&n.tagName==='H3')h3=n.firstChild.textContent.trim();
   if(n.tagName==='H2'){h2=n.firstChild.textContent.trim();break}}
- const sr=typeof PRE_SEARCH!=='undefined'&&PRE_SEARCH.includes(+el.dataset.id);
- return (sr?'代刷 · ':'')+[b?b.firstChild.textContent:'',h2,h3].filter(Boolean).join(' › ')}return '待处理'}""")
+ return sr+[b?b.firstChild.textContent:'',h2,h3].filter(Boolean).join(' › ')}
+ const t=el.closest('table'),h=t&&t.previousElementSibling,why=h&&h.tagName==='H3'?h.firstChild.textContent.trim():'';
+ return sr+(el.dataset.cat||'未分类')+'（没进正文'+(why?'：'+why:'')+'）'}""")
 assert "PRE_SEARCH" in JS, "回收站 where() 没替换上"
 assert "__delInit=0" in JS, "打开页面时不存盘 没替换上"
 
@@ -142,7 +145,9 @@ def media_link(x, fs=None):
 
 
 def row(x, fs=None):
-    return (f"<tr data-id='{x['id']}'><td>#{x['id']}</td><td>{html.escape(x.get('_folder', ''))}</td>"
+    # 没进正文的条目也带上分类（有的话）：分类 › 大类 › 小主题，回收站里按它归位
+    cat = " › ".join(p for p in (x.get("_folder"), x.get("category"), x.get("topic")) if p and isinstance(p, str))
+    return (f"<tr data-id='{x['id']}' data-cat='{html.escape(cat)}'><td>#{x['id']}</td><td>{html.escape(cat)}</td>"
             f"<td>{html.escape(x.get('theme') or '')}</td><td>{html.escape(x.get('_author', ''))}</td>"
             f"<td>{html.escape(x.get('reason') or '')}</td><td>{media_link(x, fs)}</td><td>{DELBTN}</td></tr>")
 
