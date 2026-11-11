@@ -193,8 +193,11 @@ def polish(settings, it, log=print, force=False, topic=None):
     used_total = 0
     res = None
     attempt, bad_json = 0, 0
+    # 等多久：稿子越长，AI 把全文重排一遍输出得越久。短稿 5 分钟；每 1000 字多给约 2 分钟，最多 20 分钟
+    # （原来固定 5 分钟，四五千字的长稿每次都超时）
+    wait = min(1200, max(300, 180 + len(raw[:12000]) // 8))
     while True:
-        text, used = llm.chat(settings, messages, max_tokens=8000, timeout=300)
+        text, used = llm.chat(settings, messages, max_tokens=8000, timeout=wait)
         used_total += used
         try:
             d = llm.parse_json(text)
