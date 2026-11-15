@@ -199,7 +199,7 @@ def build(fs=None):
     P = ["<!doctype html><html lang=zh><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>",
          f"<title>{title} · 收藏学习台</title><link rel=icon href='/static/logo.svg'><style>{CSS}{TOPBAR_CSS}{RT.CSS}{RX.CSS}</style><body><main>",
          "<nav class=topbar><b>收藏学习台</b><a class=cur href='/reader'>学习库</a><a href='/#/process'>添加与处理</a>"
-         "<a href='/#/graph'>知识网络</a><a href='/#/weekly'>每周周报</a><span class=sp></span><a href='/#/settings'>设置</a></nav>",
+         "<a href='/#/graph'>知识网络</a><span class=sp></span><a href='/#/settings'>设置</a></nav>",
          f"<header><h1>{title}</h1>",
          RX.ibar(sum(1 for x in qc if x['id'] not in hidden), time.strftime('%Y-%m-%d %H:%M')),
          "<input id=q type=search placeholder='搜索标题、金句、作者、正文……（按 / 聚焦，空格隔开多个词）' autocomplete=off></header><nav class=tabs>"]

@@ -70,6 +70,18 @@ def conn():
     return c
 
 
+def reset():
+    """丢掉当前线程的数据库连接，下次用时重新打开。
+    硬盘断开又连上（USB 移动硬盘常见）以后，旧连接手里的文件句柄已经失效，会一直报 disk I/O error；换个新连接就好了。"""
+    c = getattr(_local, "conn", None)
+    _local.conn = None
+    if c is not None:
+        try:
+            c.close()
+        except Exception:
+            pass
+
+
 EXTRA_COLUMNS = {
     "segments_json": "TEXT",   # 带时间戳的文字稿分段
     "deep_json": "TEXT",       # 精读结果

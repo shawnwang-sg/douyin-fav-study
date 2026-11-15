@@ -9,6 +9,7 @@ import urllib.request
 import queue
 import random
 import shutil
+import sqlite3
 import threading
 import time
 import traceback
@@ -137,6 +138,9 @@ class Worker:
             self.state.update(busy=True, task=cmd, stage="", item_id=None)
             if cmd in ("login", "sync"):
                 self.state["last_error"] = None
+            # 这个线程一直活着：硬盘（尤其是 USB 移动硬盘）断开又连上以后，手里的旧数据库连接会一直报 disk I/O error。
+            # 每做一件事之前换一个新连接，就不会被上一次的断线拖累
+            db.reset()
             try:
                 if cmd == "process":
                     self._process_all(kw.get("ids"))
@@ -160,9 +164,17 @@ class Worker:
                 self.log(f"⚠ {e}")
                 self._set_error(cmd, str(e))
             except Exception as e:
-                self.log(f"⚠ 出错了：{e}")
-                self._set_error(cmd, f"出错了：{e}")
-                traceback.print_exc()
+                io_err = isinstance(e, sqlite3.Error) and any(k in str(e) for k in ("disk I/O error", "unable to open database"))
+                if io_err and not kw.get("_retried"):
+                    # 做到一半硬盘断了一下：重新连上数据库，把这件事自动再做一次
+                    self.log("⚠ 读写数据库时硬盘断了一下（disk I/O error）。已重新连接，自动再试一次……")
+                    db.reset()
+                    time.sleep(3)
+                    self.cmds.put((cmd, dict(kw, _retried=True)))
+                else:
+                    self.log(f"⚠ 出错了：{e}" + ("（硬盘还是读写不了：看看移动硬盘的线和供电，再点一次）" if io_err else ""))
+                    self._set_error(cmd, f"出错了：{e}")
+                    traceback.print_exc()
             finally:
                 self._service_urgent()
                 if self.cmds.empty():

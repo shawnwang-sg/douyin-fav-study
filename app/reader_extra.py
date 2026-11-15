@@ -22,6 +22,8 @@ button.rd{border:1px solid var(--line);background:none;color:var(--mut);border-r
  line-height:1.7;cursor:pointer;flex:none;margin-right:8px;opacity:.55}
 button.rd:hover{opacity:1;color:var(--acc);border-color:var(--acc)}
 article.read button.rd{opacity:1;color:var(--acc);border-color:var(--acc)}
+/* 作者那一行：左边是作者，按钮全部靠右排在一起（精品 / 最近 / 专题里少了某个按钮时，别的按钮也不会散到中间去） */
+.src>span:first-child{margin-right:auto}
 article.read h5{color:var(--mut)}
 .side .tart a.read::after{content:" ✓";font-size:11px}
 body.f-unread article.read:not(.keep),body.f-week article:not(.wk){display:none}
@@ -147,7 +149,7 @@ function buildRecent(){const nav=$('#rcnav'),v=$('#rcview');if(!v)return;
   body+=`<h3 id="${hid}">${g.d}<span class=cnt>${g.ids.length}</span>${PLAYBTN_HTML}</h3>`+g.ids.map(id=>`<i data-clone="${id}"></i>`).join('')}
  nav.innerHTML=navH+'</div>';v.innerHTML=body;
  v.querySelectorAll('i[data-clone]').forEach(ph=>{const id=ph.dataset.clone,c=document.getElementById('a'+id).cloneNode(true);
-  c.id='rca'+id;c.classList.remove('now','tpsel','keep');c.querySelectorAll('button.tpadd').forEach(x=>x.remove());
+  c.id='rca'+id;c.classList.remove('now','keep');  // 「＋专题」留着（选中状态也跟原处一致）：在这里也能挑文章进专题
   if(QT.length){const t=TXT&&TXT.get(id);c.classList.toggle('hide',!(t&&QT.every(w=>t.includes(w))))}else c.classList.remove('hide');
   ph.replaceWith(c)})}
 document.addEventListener('click',e=>{if(e.target.closest('.tabs button[data-tab=trecent]'))buildRecent()});
@@ -195,7 +197,7 @@ function bar(){if(!ib.unread)return;let u=0,w=0;
  ib.unread.innerHTML=`<a href="#" data-mode=unread class="${MODE==='unread'?'act':''}" title="读完一篇点「标为已读」；点这里只看还没读的">`
   +(MODE==='unread'?`只看未读 ${u.toLocaleString()} ✕`:`未读 ${u.toLocaleString()}`)+'</a>';
  ib.week.innerHTML=(w||MODE==='week'?`<a href="#" data-mode=week class="${MODE==='week'?'act':''}" title="只看这一周新进学习库的">`
-  +(MODE==='week'?`只看本周新增 ${w} ✕`:`本周新增 ${w}`)+'</a>　':'')+'<a href="/#/weekly">周报</a>';
+  +(MODE==='week'?`只看本周新增 ${w} ✕`:`本周新增 ${w}`)+'</a>':'');
  const sec=activeSec();
  ib.q.textContent=!QT.length?'':!HITS.total?'没有搜到':`搜到 ${HITS.total} 篇`+(isContent(sec)&&!HITS.per[sec.id]?'，这个分类里没有，按 Enter 跳过去':'')}
 document.addEventListener('click',e=>{const a=e.target.closest('#ibar a[data-mode]');if(!a)return;e.preventDefault();setMode(a.dataset.mode)});
