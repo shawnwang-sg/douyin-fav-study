@@ -165,7 +165,8 @@ def build(fs=None):
     tab_names = [x["name"] for x in t["tabs"]]
     tmap = _topic_map()
     rows = db.conn().execute(
-        "SELECT id,title,author,url,local_path,platform,media_type,status,reason,category,note_json "
+        "SELECT id,title,author,url,local_path,platform,media_type,status,reason,category,note_json,"
+        "COALESCE(fav_at, created_at) AS t "
         "FROM items WHERE status IN ('done','skipped','irrelevant')").fetchall()
     keep = collections.defaultdict(lambda: collections.defaultdict(lambda: collections.defaultdict(list)))
     low, move, qc = [], [], []
@@ -173,7 +174,7 @@ def build(fs=None):
         n = json.loads(r["note_json"] or "null") or {}
         x = dict(n)
         x.update(id=r["id"], _author=r["author"] or "", _url=r["url"] or "", _path=r["local_path"] or "",
-                 _platform=r["platform"] or "douyin")
+                 _platform=r["platform"] or "douyin", _t=r["t"] or 0)
         if n.get("mode") != "yuedu":
             if r["status"] == "skipped" and "说话内容" in (r["reason"] or ""):
                 low.append({**x, "verdict": "low_info", "low_info_type": "画面为主",
@@ -204,7 +205,9 @@ def build(fs=None):
          "<input id=q type=search placeholder='搜索标题、金句、作者、正文……（按 / 聚焦，空格隔开多个词）' autocomplete=off></header><nav class=tabs>"]
     order = tab_names + sorted(k for k in keep if k not in tab_names)
     tabs = [f for f in order if keep.get(f)] + [f for f in order if not keep.get(f)]
-    P.append(RT.STAR_BUTTON + RT.TAB_BUTTON)  # 特殊 tab：精品、专题整理放最前
+    # 最近 100：最新进学习库的 100 篇（按收藏 / 加入时间，新的在前；回收站里的不算）
+    recent = [[x["id"], int(x["_t"])] for x in sorted(qc, key=lambda x: (-x["_t"], -x["id"])) if x["id"] not in hidden][:RX.RECENT_N]
+    P.append(RX.recent_button(len(recent)) + RT.STAR_BUTTON + RT.TAB_BUTTON)  # 特殊 tab：最近 100、精品、专题整理放最前
     for i, f in enumerate(tabs):
         cnt = sum(1 for tt in keep.get(f, {}).values() for v in tt.values() for x in v if x["id"] not in hidden)
         P.append(f"<button data-tab='t{i}' class='{'on' if i == 0 else ''}'>{html.escape(f)}<span>{cnt or '待整理'}</span></button>")
@@ -248,7 +251,7 @@ def build(fs=None):
                              f"<div class=gold>{inline(x.get('gold', ''))}</div><div class=body>{render(x.get('body', ''))}</div></article>")
         P.append("</div></div></section>")
 
-    P.append(RT.STAR_SECTION + RT.SECTION)
+    P.append(RT.STAR_SECTION + RT.SECTION + RX.RECENT_SECTION)
     P.append("<section id=tlow class=tab><h2>文字没有信息量的</h2><p class=note>这些不进阅读版。原文件都还在，需要的话可以回原视频看画面。</p>")
     by = collections.defaultdict(list)
     for x in low:
@@ -291,6 +294,6 @@ def build(fs=None):
     week = [r[0] for r in db.conn().execute(  # 本周新进学习库的
         "SELECT id FROM items WHERE status='done' AND COALESCE(fav_at, created_at) >= ?", (week_start(),))]
     P.append(f"</main>{GOTOP}{RT.HTML}<script>const PRE_DEL={json.dumps(pre)},PRE_STAR={json.dumps(starred)},PRE_SEARCH={json.dumps(sorted(search_ids()))},PRE_HL={hl},"
-             f"PRE_READ={json.dumps(read)},PRE_WEEK={json.dumps(week)},PAGE_NAME='学习库';</script>" + JS
-             + RT.JS.replace("${PLAYBTN_HTML}", PLAYBTN) + RX.JS)
+             f"PRE_READ={json.dumps(read)},PRE_WEEK={json.dumps(week)},PRE_RECENT={json.dumps(recent)},PAGE_NAME='学习库';</script>" + JS
+             + RT.JS.replace("${PLAYBTN_HTML}", PLAYBTN) + RX.JS.replace("${PLAYBTN_HTML}", PLAYBTN))
     return "".join(P)

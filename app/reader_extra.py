@@ -32,6 +32,16 @@ body.f-unread article.read:not(.keep),body.f-week article:not(.wk){display:none}
 #kbd td{border:0;padding:2px 14px 2px 0}#kbd kbd{border:1px solid var(--line);border-radius:6px;padding:0 7px;background:var(--bg);font:13px/1.6 Consolas,monospace}
 """
 
+# 最近 100：特殊分类，放在最前面。文章是页面脚本从原来的分类里复制过来的（和「精品」一样），按天分组
+RECENT_N = 100
+RECENT_SECTION = ("<section id=trecent class=tab><div class=layout><aside class=side><div class=tp-side id=rcnav></div></aside>"
+                  "<div class=content id=rcview></div></div></section>")
+
+
+def recent_button(n):
+    return f"<button data-tab=trecent class=sptab title='最新进学习库的 {RECENT_N} 篇，新的在前'>最近<span id=rccnt>{n}</span></button>"
+
+
 # 信息条：服务器只放「共 N 篇」，其余由页面脚本填
 def ibar(total, updated):
     return (f"<p class=sub id=ibar><span title='页面生成于 {updated}'>共 {total} 篇</span><span id=ib-unread></span>"
@@ -123,6 +133,25 @@ qEl.addEventListener('keydown',e=>{
  if(e.key==='Enter'){e.preventDefault();clearTimeout(qt);applyQ(qEl.value);firstHit();qEl.blur()}
  else if(e.key==='Escape'){e.preventDefault();clearTimeout(qt);qEl.value='';applyQ('');qEl.blur()}});
 
+// ---- 最近 100：最新进库的 100 篇，按天分组，新的在前。文章从原来的分类复制过来，播放、连播、精品、已读、删除都通用
+const RECENT=(typeof PRE_RECENT!=='undefined'?PRE_RECENT:[]);
+function buildRecent(){const nav=$('#rcnav'),v=$('#rcview');if(!v)return;
+ const day=t=>{const d=new Date(t*1000);return `${d.getMonth()+1} 月 ${d.getDate()} 日`};
+ const groups=[];let n=0;
+ for(const [id,t] of RECENT){const src=document.getElementById('a'+id);if(!src||src.classList.contains('gone'))continue;
+  const d=day(t);if(!groups.length||groups[groups.length-1].d!==d)groups.push({d,ids:[]});groups[groups.length-1].ids.push(id);n++}
+ const cnt=$('#rccnt');if(cnt)cnt.textContent=n;
+ if(!n){nav.innerHTML='';v.innerHTML='<div class=tp-empty><h2>最近</h2><p>学习库里还没有文章。添加并整理好以后，最新的 100 篇会出现在这里。</p></div>';return}
+ let navH='<div class="st-nav">',body=`<div class=tabplay>最新进学习库的 ${n} 篇，新的在前 ${PLAYBTN_HTML}</div>`,k=0;
+ for(const g of groups){const hid='rc'+(k++);navH+=`<a class=c2 href="#${hid}">${g.d} <span>${g.ids.length}</span></a>`;
+  body+=`<h3 id="${hid}">${g.d}<span class=cnt>${g.ids.length}</span>${PLAYBTN_HTML}</h3>`+g.ids.map(id=>`<i data-clone="${id}"></i>`).join('')}
+ nav.innerHTML=navH+'</div>';v.innerHTML=body;
+ v.querySelectorAll('i[data-clone]').forEach(ph=>{const id=ph.dataset.clone,c=document.getElementById('a'+id).cloneNode(true);
+  c.id='rca'+id;c.classList.remove('now','tpsel','keep');c.querySelectorAll('button.tpadd').forEach(x=>x.remove());
+  if(QT.length){const t=TXT&&TXT.get(id);c.classList.toggle('hide',!(t&&QT.every(w=>t.includes(w))))}else c.classList.remove('hide');
+  ph.replaceWith(c)})}
+document.addEventListener('click',e=>{if(e.target.closest('.tabs button[data-tab=trecent]'))buildRecent()});
+
 // ---- 跳到某一篇（需要的话先切 tab）
 function goTo(a,flash=true){const sec=a.closest('section.tab');
  if(sec&&!sec.classList.contains('on')){const b=tabBtn(sec.id);if(b)b.click()}
@@ -213,6 +242,6 @@ document.addEventListener('keydown',e=>{if(e.ctrlKey||e.metaKey||e.altKey||e.isC
  e.preventDefault()});
 const gt=$('.gotop');if(gt){const b=document.createElement('button');b.title='快捷键（按 ? 也行）';b.textContent='⌨ 快捷键';b.onclick=()=>kbd.showModal();gt.prepend(b)}
 
-paintMode();if(MODE)refresh();bar();track();poll();
+paintMode();if(MODE)refresh();bar();if($('#trecent').classList.contains('on'))buildRecent();track();poll();
 })();
 </script>"""
