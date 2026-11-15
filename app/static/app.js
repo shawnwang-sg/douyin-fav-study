@@ -728,9 +728,10 @@ async function renderProcess() {
   if (!syncPlat) syncPlat = s.sync_platform || "douyin";
   view.innerHTML = `
     <div class="head"><div><h1>添加与处理</h1><div class="muted">读取信息（必需）→ 下载进本地视频库 → 本地转文字 → 润色排版（保留原话，改动 ≤${s.max_change_pct || 15}%）→ 学习库</div></div>
-      <div class="spacer"></div><a class="btn" href="#/weekly">整理这一周的收藏 →</a></div>
+      </div>
     <div id="errSlot">${lastErrorBanner()}</div>
     ${bannerHtml()}
+    <div class="card weekly-sync" id="wkCard"></div>
     <div class="card sync-card">${syncCardHtml(s)}</div>
     <div class="panels">
       <div class="card col-card">
@@ -807,10 +808,56 @@ async function renderProcess() {
     } catch (e) { toast(e.message); }
   };
   $("#inboxScan").onclick = async () => { const r = await api("/api/inbox", {}); toast(r.added ? `新增 ${r.added} 个文件，开始处理` : "收件箱里没有新文件"); renderProcessLive(); };
+  drawWeekSync(); loadWeekInfo();
   renderProcessLive();
 }
 
+// ---- 整理这一周的收藏：一键把最近的新收藏下载、转写、润色进学习库（原来在「每周周报」页，现在放在这一页最上面）
+let wkInfo = null, wkKey = "";
+function weekSyncHtml() {
+  const r = wkInfo || {}, w = STATE?.worker || {}, running = w.task === "weekly_sync";
+  const when = (t) => new Date(t * 1000).toLocaleString("zh-CN", { hour12: false });
+  return `<div style="flex:1;min-width:240px"><h2 style="margin:0 0 4px">整理这一周的收藏</h2>
+      <div class="muted small">点一下：读抖音和小红书「收藏」里最新的收藏（碰到连续 20 条已经有的就停，不会把整个列表刷一遍），
+        下载进本地视频库 → 转文字 → 保留原话润色排版 → 收进学习库。一条一条来，防封号。</div>
+      <div class="small" style="margin-top:8px">${r.last_sync ? `上次整理：${when(r.last_sync)}` : wkInfo ? "还没整理过" : ""}
+        ${Object.keys(r.fav_new || {}).length ? ` · 这周新收藏：${Object.entries(r.fav_new).map(([p, n]) => `${PNAME[p] || p} ${n} 条`).join("、")}` : ""}</div>
+      <div class="row small" style="margin-top:8px;gap:14px">${["douyin", "xhs"].map((p) => `<label class="check"><input type="checkbox" class="wkPlat" value="${p}" checked> ${PNAME[p]}</label>`).join("")}</div>
+    </div>
+    ${running ? `<div class="row"><div class="spinner"></div><span class="small">${esc(w.stage || "整理中…")}</span><button class="btn sm danger" id="wkStop">停止整理</button></div>`
+      : `<div style="display:flex;flex-direction:column;gap:8px;align-items:stretch">
+           <button class="btn primary" id="wkSync">${ico("retry")}开始整理</button>
+           <button class="btn" id="wkMonth" title="抖音：按收藏时间，把最近 30 天收藏的全部过一遍。小红书接口不给收藏时间：读到连续 20 条以前就有的（旧库导入的、或 30 天前就见过的）就停，比每周整理多往下看一点">按月整理（最近 30 天）</button>
+           ${r.last_monthly ? `<span class="muted small">上次按月：${new Date(r.last_monthly * 1000).toLocaleDateString("zh-CN")}</span>` : ""}</div>`}`;
+}
+function drawWeekSync() {
+  const el = $("#wkCard");
+  if (!el) return;
+  const had = $$(".wkPlat"), checked = had.length ? had.filter((c) => c.checked).map((c) => c.value) : ["douyin", "xhs"];
+  el.innerHTML = weekSyncHtml();
+  $$(".wkPlat").forEach((c) => (c.checked = checked.includes(c.value)));  // 页面几秒重画一次，勾选不能丢
+  wkKey = JSON.stringify([STATE?.worker?.task === "weekly_sync", STATE?.worker?.stage, wkInfo?.last_sync]);
+  const start = async (full) => {
+    const platforms = $$(".wkPlat").filter((c) => c.checked).map((c) => c.value);
+    if (!platforms.length) return toast("至少选一个平台");
+    const ready = await loginGate(platforms);
+    if (!ready || !ready.length) return;
+    await api("/api/weekly/sync", full ? { platforms: ready, full: true, days: 30 } : { platforms: ready });
+    toast(full ? "开始按月整理：把最近 30 天的收藏完整过一遍，进度在下面" : "开始整理这一周的收藏：会弹出浏览器窗口读收藏列表，进度在下面", 4000);
+    await refreshState(); drawWeekSync(); renderProcessLive();
+  };
+  $("#wkSync") && ($("#wkSync").onclick = () => start(false));
+  $("#wkMonth") && ($("#wkMonth").onclick = () => start(true));
+  $("#wkStop") && ($("#wkStop").onclick = async () => {
+    const b = $("#wkStop"); b.disabled = true; b.textContent = "正在停止…";
+    await api("/api/stop", {}).catch(() => {});
+    toast("已发出停止：正在读的列表马上停，正在转写的这一条做完就停", 4000);
+  });
+}
+function loadWeekInfo() { api("/api/weekly?offset=0").then((r) => { wkInfo = r; drawWeekSync(); }).catch(() => {}); }
+
 // 已跳过的大类（按跳过原因归）
+const RECENT_SKIP = "最近 50 条";  // 特殊的一组：最新被跳过的 50 条（不管原因），放最前面、默认展开
 const SKIP_GROUPS = [
   ["重复", /重复/], ["视频已删除 / 私密", /已删除或设为私密/], ["超过 15 分钟的长视频", /分钟的长视频|长视频/],
   ["画面为主 / 没说话", /几乎没有说话|画面为主|没有声音|纯音乐|无对白/],
@@ -818,7 +865,7 @@ const SKIP_GROUPS = [
   ["以前的旧收藏（没处理过）", /以前就收藏的旧条目/], ["图文没内容", /图片|图文|文字（可能/],
   ["广告", /广告/], ["其他", /.*/],
 ];
-const SKIP_OPEN = new Set();  // 已跳过里点开的分组：页面几秒刷新一次，刷新后保持展开
+const SKIP_OPEN = new Set([RECENT_SKIP]);  // 已跳过里点开的分组：页面几秒刷新一次，刷新后保持展开
 const skipGroup = (reason) => (SKIP_GROUPS.find(([, re]) => re.test(reason || "")) || ["其他"])[0];
 function origLink(it) {
   if (it.url && /^https?:/.test(it.url)) return it.url;
@@ -862,6 +909,9 @@ function renderDownloads() {
 let lastListKey = "", lastDlKey = "";
 async function renderProcessLive(opt = {}) {
   if (!$("#statusCard")) return;
+  // 「整理这一周」那张卡：开始 / 结束 / 换了一条才重画；整理刚结束时顺便更新「上次整理」时间
+  const wkNow = JSON.stringify([STATE?.worker?.task === "weekly_sync", STATE?.worker?.stage, wkInfo?.last_sync]);
+  if (wkNow !== wkKey) { const ended = wkKey.startsWith("[true") && wkNow.startsWith("[false"); drawWeekSync(); if (ended) loadWeekInfo(); }
   // 定时刷新时，下载记录没变就不重画
   const dlKey = JSON.stringify([STATE.downloads, STATE.download_counts, STATE.download_dir]);
   if (!opt.poll || dlKey !== lastDlKey) { lastDlKey = dlKey; renderDownloads(); }
@@ -940,7 +990,11 @@ async function renderProcessLive(opt = {}) {
     // 已跳过：按原因分大类，默认收起，点开再看
     const groups = new Map(SKIP_GROUPS.map(([name]) => [name, []]));
     for (const it of items) groups.get(skipGroup(it.reason)).push(it);
-    $("#qlist").innerHTML = [...groups].filter(([, l]) => l.length).map(([name, l]) =>
+    // 最近 50 条：列表本来就是新的在前（按加入顺序），取前 50。每条后面照样写着跳过原因；这一组不放「整组」按钮，免得误操作
+    const recent = items.slice(0, 50);
+    $("#qlist").innerHTML = `<details class="fold skipgrp" data-g="${RECENT_SKIP}"${SKIP_OPEN.has(RECENT_SKIP) ? " open" : ""}>`
+      + `<summary><b>${RECENT_SKIP}</b> <span class="muted">最新被跳过的，新的在前</span></summary>${recent.map(rowHtml).join("")}</details>`
+      + [...groups].filter(([, l]) => l.length).map(([name, l]) =>
       `<details class="fold skipgrp" data-g="${esc(name)}"${SKIP_OPEN.has(name) ? " open" : ""}><summary><b>${esc(name)}</b> <span class="muted">${l.length} 条</span>`
       + `<span class="grp-acts"><button class="btn sm" data-ga="force_include" data-ids="${l.map((x) => x.id).join(",")}" data-n="${esc(name)}">整组加入整理</button>`
       + `<button class="btn sm ghost" data-ga="delete" data-ids="${l.map((x) => x.id).join(",")}" data-n="${esc(name)}">整组删除</button></span></summary>`
@@ -1228,7 +1282,7 @@ function updateInfoHtml(up) {
 let weeklyDue = null;
 (async () => {
   await refreshState();
-  try { weeklyDue = await api("/api/weekly/due"); $("#navWeekly").hidden = !weeklyDue.due; } catch {}
+  // （每周周报的入口已经去掉：不再去问「上周周报出来没有」）
   // 新手引导没做完先去引导页；否则首页就是学习库（其他页面都从学习库顶部的导航进）
   if (!location.hash) {
     if (!guideActive()) { location.replace("/reader"); return; }
@@ -1854,7 +1908,7 @@ async function renderWeekly(offset) {
   view.innerHTML = `<div class="sk sk-h1"></div><div class="sk sk-block" style="height:140px"></div><div class="sk sk-block" style="height:260px"></div>`;
   const r = await api("/api/weekly?offset=" + offset);
   if (weeklyDue?.due && r.week === weeklyDue.week) {  // 看过了，不再提示
-    weeklyDue.due = false; $("#navWeekly").hidden = true;
+    weeklyDue.due = false;
     api("/api/weekly/seen", { week: r.week }).catch(() => {});
   }
   const tile = (n, label, sub = "") => `<div class="wtile"><b>${n}</b><span>${label}</span>${sub ? `<em>${sub}</em>` : ""}</div>`;

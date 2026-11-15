@@ -83,7 +83,7 @@ article.tpsel button.tpadd{background:var(--acc);color:var(--onfg);border-color:
 #tppick button:hover{border-color:var(--acc);color:var(--acc)}#tppick button small{color:var(--mut);margin-left:6px}
 .tp-new{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px dashed var(--line);padding-top:12px}
 .tp-new select,.tp-new input{font:inherit;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
-.tp-new input{flex:1;min-width:140px}
+.tp-new input{flex:1;min-width:140px}.tp-new>span{flex:0 0 100%;color:var(--mut);font-size:13px}.tp-new #tppath{flex:2}
 .tp-foot{display:flex;justify-content:flex-end;margin-top:12px}
 .tp-wrap{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:28px;align-items:start}
 .tp-note{position:sticky;top:64px;height:calc(100vh - 170px);display:flex;flex-direction:column;border:1px solid var(--line);
@@ -99,7 +99,9 @@ article.tpsel button.tpadd{background:var(--acc);color:var(--onfg);border-color:
 
 HTML = """<div id=tpbar class=gone>已选 <b id=tpn>0</b> 条<button id=tpgo>加入专题…</button><button id=tpclr>取消选择</button></div>
 <dialog id=tpdlg><h3>加入哪个专题？</h3><div id=tppick></div>
-<div class=tp-new><span>新建专题：</span><select id=tpnode></select><input id=tpname placeholder=专题名><button class=tp-bt id=tpnew>新建并加入</button></div>
+<div class=tp-new><span>新建专题（已经按这几篇现在的大类和小主题填好，两个框都可以改）：</span>
+<input id=tppath list=tppaths placeholder="分类，比如 网球；要分级就用 › 隔开" title="专题放在哪个分类下面；用 › 或 / 分级，最多三级，没有的会自动建"><datalist id=tppaths></datalist>
+<input id=tpname placeholder=专题名><button class=tp-bt id=tpnew>新建并加入</button></div>
 <div class=tp-foot><button class=tp-bt id=tpcancel>取消</button></div></dialog><div id=tptoast class=gone></div>
 <div id=selbar class=gone></div>
 <dialog id=nlpick><h3>加入哪个专题的笔记？</h3><blockquote id=nlq></blockquote><div id=nllist></div>
@@ -201,19 +203,40 @@ document.addEventListener('click',e=>{const b=e.target.closest('button.tpadd');i
 function clearSel(){TP.sel.clear();$$('article.tpsel').forEach(a=>{a.classList.remove('tpsel');const b=a.querySelector('button.tpadd');if(b)b.textContent='＋专题'});bar()}
 $('#tpclr').onclick=clearSel;
 const dlg=$('#tpdlg');
-function nodeOpts(pid,lv){return kids(pid).map(n=>`<option value=${n.id}>${'　'.repeat(lv)}${esc(n.name)}</option>`+nodeOpts(n.id,lv+1)).join('')}
-$('#tpgo').onclick=()=>{const ts=TP.data.topics;
- $('#tppick').innerHTML=ts.length?ts.map(t=>`<button data-t=${t.id}>${esc(path(t.node_id).concat(t.name).join(' › '))}<small>${t.items.length} 条</small></button>`).join('')
-  :`<p class=tp-empty>还没有专题。可以在下面直接新建一个。</p>`;
- const opts=nodeOpts(null,0);$('#tpnode').innerHTML=opts||'<option value="">（先新建一个一级分类）</option>';
- $('#tpnode').insertAdjacentHTML('beforeend','<option value=new>＋ 新建一级分类…</option>');
- $('#tpname').value='';dlg.showModal()};
+// 加入专题时，按选中的文章现在的细分自动填好一个专题：分类 = 大类（不带「爱好 / 厉害」这一级收藏分类），专题名 = 小主题；两个框都可以改
+const SEP=/\s*[›>\/／]\s*/;
+function catOf(id){const a=document.getElementById('a'+id);if(!a)return null;
+ const sec=a.closest('section.tab'),tb=$(`.tabs button[data-tab="${sec.id}"]`);let h2=null,h3=null;
+ for(let n=a.previousElementSibling;n;n=n.previousElementSibling){if(!h3&&n.tagName==='H3')h3=n;if(n.tagName==='H2'){h2=n;break}}
+ const t=x=>x?x.firstChild.textContent.trim():'';
+ return [tb?tb.firstChild.textContent.trim():'',t(h2).replace(/^[一二三四五六七八九十]+、\s*/,''),t(h3)]}
+function suggest(){const cnt=new Map();  // 选了好几篇、分类不一样时，取最多的那个
+ for(const id of TP.sel){const c=catOf(id);if(!c)continue;const k=c.join('\u0001');cnt.set(k,(cnt.get(k)||0)+1)}
+ const best=[...cnt].sort((x,y)=>y[1]-x[1])[0];if(!best)return{path:[],name:''};
+ const [tab,c2,c3]=best[0].split('\u0001');return{path:[c2||tab].filter(Boolean),name:c3||c2||tab}}
+async function refetch(){TP.data=await fetch('/api/topics').then(r=>r.json())}
+async function ensureNode(names){let pid=null;  // 分类一级一级往下找，没有的就建
+ for(const nm of names){let n=kids(pid).find(x=>x.name===nm);
+  if(!n){const r=await post({op:'node_create',parent_id:pid,name:nm});await refetch();n=node(r.id)}
+  pid=n.id}
+ return pid}
+$('#tpgo').onclick=()=>{const ts=TP.data.topics,sg=suggest(),full=t=>path(t.node_id).concat(t.name).join(' › ');
+ const hit=ts.find(t=>full(t)===sg.path.concat(sg.name).join(' › ')),list=hit?[hit,...ts.filter(t=>t!==hit)]:ts;
+ $('#tppick').innerHTML=list.length?list.map(t=>`<button data-t=${t.id}>${esc(full(t))}<small>${t.items.length} 条</small>`
+   +(t===hit?'<small>· 和现在的分类一样</small>':'')+'</button>').join('')
+  :`<p class=tp-empty>还没有专题。下面已经按现在的分类填好了一个，可以直接新建。</p>`;
+ $('#tppaths').innerHTML=TP.data.nodes.map(n=>`<option value="${esc(path(n.id).join(' › '))}">`).join('');
+ $('#tppath').value=sg.path.join(' › ');$('#tpname').value=sg.name;dlg.showModal()};
 async function addTo(tid){const ids=[...TP.sel];const r=await post({op:'add',topic_id:tid,ids});dlg.close();clearSel();await load();
  const t=topic(tid);toast(`已加入「${t?t.name:''}」：新增 ${r.added} 条`+(ids.length>r.added?`（${ids.length-r.added} 条本来就在里面）`:''))}
 $('#tppick').onclick=e=>{const b=e.target.closest('button[data-t]');if(b)addTo(+b.dataset.t).catch(err=>alert(err.message))};
-$('#tpnew').onclick=async()=>{try{let nid=$('#tpnode').value;const name=$('#tpname').value.trim();if(!name){$('#tpname').focus();return}
- if(nid==='new'||!nid){const nn=prompt('一级分类的名字');if(!nn)return;nid=(await post({op:'node_create',parent_id:null,name:nn})).id}
- const r=await post({op:'topic_create',node_id:+nid,name});await load();await addTo(r.id)}catch(err){alert(err.message)}};
+$('#tpnew').onclick=async()=>{try{const name=$('#tpname').value.trim(),names=$('#tppath').value.split(SEP).map(s=>s.trim()).filter(Boolean);
+ if(!names.length){$('#tppath').focus();return}if(!name){$('#tpname').focus();return}
+ const max=TP.data.max_depth||3;if(names.length>max){alert(`分类最多 ${max} 级，现在写了 ${names.length} 级`);return}
+ const nid=await ensureNode(names);await refetch();
+ const ex=TP.data.topics.find(t=>t.node_id===nid&&t.name===name);  // 这个分类下已经有同名专题：直接加进去，不重复建
+ const tid=ex?ex.id:(await post({op:'topic_create',node_id:nid,name})).id;
+ await load();await addTo(tid)}catch(err){alert(err.message)}};
 $('#tpcancel').onclick=()=>dlg.close();
 // ---- 代刷
 $('#tpfcancel').onclick=()=>$('#tpfeed').close();
