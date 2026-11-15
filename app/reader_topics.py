@@ -240,7 +240,7 @@ $('#tpfeed').addEventListener('close',()=>{clearTimeout(feedTimer);$('#tpfprog')
 function isDel(id){try{return DEL.has(String(id))}catch(e){return false}}
 // ---- 精品：每篇文章标题前一颗星，点亮 = 精品，复制一份到「精品」tab，按原来的 分类 → 大类 → 小主题 排目录
 const STAR=new Set((typeof PRE_STAR!=='undefined'?PRE_STAR:[]).map(Number));
-const CONTENT='section.tab:not(#ttopic):not(#tstar):not(#tlow):not(#tbin):not(#tqc) article';
+const CONTENT='section.tab:not(#ttopic):not(#tstar):not(#trecent):not(#tlow):not(#tbin):not(#tqc) article';
 function starBtn(id){const b=document.createElement('button');b.className='star'+(STAR.has(id)?' on':'');
  b.title='精品：点亮后会复制一份到「精品」tab（再点一下取消）';b.textContent=STAR.has(id)?'★':'☆';return b}
 $$(CONTENT).forEach(a=>{const h=a.querySelector('.hd');if(h)h.prepend(starBtn(+a.dataset.id))});
