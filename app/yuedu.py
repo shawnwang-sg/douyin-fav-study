@@ -171,9 +171,10 @@ def _tax_text(t):
     return "\n".join(lines)
 
 
-def polish(settings, it, log=print, force=False, topic=None):
+def polish(settings, it, log=print, force=False, topic=None, keep_low=False):
     """润色一条。返回 (结果 dict, token 数)。结果 verdict = keep / low_info / move。
-    topic：代刷来的条目是为哪个专题搜的；会顺便让 AI 判断和专题有没有关系，结果放在 res["topic_fit"]（True / False）。"""
+    topic：代刷来的条目是为哪个专题搜的；会顺便让 AI 判断和专题有没有关系，结果放在 res["topic_fit"]（True / False）。
+    keep_low：「不跳过」——没信息量的也照常收（verdict 不用 low_info）；明显放错收藏的仍然可以判 move。"""
     t = taxonomy()
     limit = float(settings.get("max_change_pct") or 15)
     raw = it.get("transcript") or ""
@@ -185,6 +186,10 @@ def polish(settings, it, log=print, force=False, topic=None):
     if force:
         user += ("\n\n（用户已经看过这条，明确要收进学习库：verdict 只能是 keep，"
                  "照常改错字、去口水词、分段排版、归类，不要判成没信息量或其他。）")
+    elif keep_low:
+        user += ("\n\n（这位用户的规矩：不要因为「没信息量」跳过。画面为主、口令带练、断断续续配合动作、转写有残缺的，"
+                 "也是他要学的内容——verdict 用 keep，照常起短标题、归大类和小主题，正文能整理多少整理多少；"
+                 "不要用 low_info。只有明显是误收藏、不属于这个收藏分类的（影视剧台词、时事新闻、广告招生、纯搞笑之类）才用 move。）")
     if topic:
         user += (f"\n\n（这条是为专题「{topic}」用关键词搜来的。请在 JSON 里另外加一个字段 \"topic_fit\"：内容和这个专题"
                  "有关系就写 true（讲到相关动作、要领、原理、练法、经验都算）；只有完全无关（搜索搜偏了、只是标签沾边、"

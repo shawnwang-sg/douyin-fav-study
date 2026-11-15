@@ -670,6 +670,9 @@ class Worker:
                     if force:  # 用户就是要这条：没说话也收进学习库，看原视频
                         self._keep_forced(it, "", f"没有说话内容（{e}）", label)
                         return
+                    if s.get("keep_all"):  # 不跳过：没说话的也进学习库，按标题归类，内容看原视频
+                        self._keep_silent(it, s, label, str(e), use_ai=extract_now)
+                        return
                     db.update(it["id"], status="skipped", reason=str(e))
                     self.log(f"[{it['id']}] 跳过：{e}")
                     self._cleanup(it, media, s)
@@ -693,7 +696,8 @@ class Worker:
                 return
             if s.get("refine_mode", "yuedu") == "yuedu":
                 self._stage(it, "extracting", f"润色排版：{label}")
-                self._polish(it, s, label, force=force)
+                # 「不跳过」开着时：没信息量的也照常润色、归类、进学习库；明显误收藏的（AI 判成「其他」）仍然单独放着
+                self._polish(it, s, label, force=force, keep_low=bool(s.get("keep_all")))
                 return
             self._stage(it, "extracting", f"AI 提炼：{label}")
             note, used = llm.extract(s, it.get("title"), it.get("author"), it["transcript"],
@@ -722,8 +726,10 @@ class Worker:
             traceback.print_exc()
             self._fail(it, f"意外错误：{e}", retry=True)
 
-    def _keep_forced(self, it, raw, why, label):
+    def _keep_forced(self, it, raw, why, label, topic=None):
         res = yuedu.forced_keep(it, raw, why)
+        if topic:
+            res["topic"] = topic
         it["note"] = res
         try:
             path = notes.write(it)
@@ -732,18 +738,55 @@ class Worker:
         db.update(it["id"], status="done", note=res, category=res["tab"], md_path=path, reason=None)
         self.log(f"[{it['id']}] ✓ 按你的选择收进学习库（{why or '原文'}）：{label}")
 
-    def _polish(self, it, s, label, force=False):
+    SILENT_NOTE = "（这条视频几乎没有说话，内容主要在画面里，点上面的播放按钮看原视频。）"
+
+    def _keep_silent(self, it, s, label, why, use_ai=True):
+        """「不跳过」时，没有说话内容的视频也进学习库：让 AI 只看标题，给它起短标题、归大类和小主题，
+        正文写明「内容在画面里，看原视频」。AI 用不了（只转文字模式 / 没配 / 出错）就照标题收，放在「其他 › 没说话的视频」。"""
+        title = (it.get("title") or "").strip()
+        if (use_ai and len(title) >= 6 and s.get("refine_mode", "yuedu") == "yuedu"
+                and (config.llm_cfg(s, "main").get("api_key") or "").strip()):
+            try:
+                self._stage(it, "extracting", f"归类（没说话，按标题）：{label}")
+                res, used = yuedu.polish(s, dict(it, transcript=title), log=self.log, keep_low=True)
+                config.add_tokens(used)
+                if res.get("verdict") == "move":  # 看标题就是误收藏的（影视剧、时事之类）：不整理，单独放着
+                    db.update(it["id"], status="irrelevant", note=res, category=yuedu.OTHER,
+                              reason="其他（影视剧台词 / 时事 / 广告等），不整理" + (f"：{res['reason']}" if res.get("reason") else ""))
+                    self.log(f"[{it['id']}] 没说话、看标题也不属于这个分类，归到「其他」不整理：{label}")
+                    return
+                if res.get("verdict") == "keep":
+                    extra = (res.get("body") or "").strip()
+                    res.update(body=self.SILENT_NOTE + (chr(10) * 2 + extra if extra else ""), change_pct=None, silent=True, reason=why)
+                    it["note"] = res
+                    try:
+                        path = notes.write(it)
+                    except Exception:
+                        path = None
+                    db.update(it["id"], status="done", note=res, category=res["tab"], md_path=path, reason=None)
+                    self.log(f"[{it['id']}] ✓ 没说话的视频，按标题归到 {res['tab']} / {res['category']} / {res['topic']}：{res['theme']}")
+                    return
+            except llm.LLMError as e:
+                self.log(f"[{it['id']}] 按标题归类没成功（{str(e)[:60]}），照标题收")
+        self._keep_forced(it, "", f"没有说话内容（{why}）", label, topic="没说话的视频")
+
+    def _polish(self, it, s, label, force=False, keep_low=False):
         """保留原话的润色排版（video-yuedu 规则）：keep 进学习库；没信息量 / 其他 单独列出，不删。
         代刷来的：顺便判断和专题有没有关系，完全无关的拿出专题、放进回收站。"""
         tps = []
         if it.get("source") == "search":
             tps = [dict(r) for r in db.conn().execute(
                 "SELECT t.id, t.name FROM topic_items ti JOIN topics t ON t.id=ti.topic_id WHERE ti.item_id=?", (it["id"],))]
-        res, used = yuedu.polish(s, it, log=self.log, force=force,
+        keep_low = keep_low and not force
+        res, used = yuedu.polish(s, it, log=self.log, force=force, keep_low=keep_low,
                                  topic=" / ".join(t["name"] for t in tps) or None)
         config.add_tokens(used)
         if tps and res.get("topic_fit") is False:
             self._drop_unrelated(it, res, tps, label)
+            return
+        if keep_low and res["verdict"] == "low_info":  # 「不跳过」：AI 还是判成没信息量 → 照原文收
+            self._keep_forced(it, it.get("transcript"), f"没信息量（{res.get('low_info_type') or '其他'}），按「不跳过」照原文收",
+                              label, topic=res.get("low_info_type") or "没信息量")
             return
         if force and res["verdict"] != "keep":
             self._keep_forced(it, it.get("transcript"), f"AI 判成{res.get('low_info_type') or '其他'}，按你的选择照原文收", label)
@@ -853,7 +896,7 @@ class Worker:
                   url=d.get("url") or it.get("url"))
         it.update({k: v for k, v in d.items() if v and k in ("title", "author", "duration", "cover", "url")})
         self.prog.set_title(it.get("title"), d.get("duration"))
-        if d.get("is_ad"):
+        if d.get("is_ad") and not s.get("keep_all"):
             db.update(it["id"], status="skipped", reason="广告视频")
             self.log(f"[{it['id']}] 跳过：广告")
             return None
@@ -962,6 +1005,11 @@ class Worker:
                 self.prog.set_frac(i / len(files))
         transcript = "\n\n".join(parts)
         if len(transcript.replace("【正文】", "").replace(" ", "").replace("\n", "")) < 15:
+            if config.load().get("keep_all"):  # 不跳过：几乎没字的图文也进学习库，看图
+                self._keep_forced(db.get(it["id"]) or it,
+                                  transcript.strip() or "（这条图文几乎没有文字，内容在图片里，点上面的按钮看原图。）",
+                                  "图文里几乎没有文字", (it.get("title") or "")[:30], topic="图片为主")
+                return False
             db.update(it["id"], status="skipped", reason="图文里几乎没有文字（可能是纯图片、表情包或摄影作品）")
             self.log(f"[{it['id']}] 跳过：图文里几乎没有文字")
             return False

@@ -1115,6 +1115,8 @@ async function renderSettings() {
       <div class="field"><label>图片文字识别（图文用）</label>
         <div class="${STATE.ocr?.backend ? "" : "banner warn"}" style="${STATE.ocr?.backend ? "" : "margin:0"}">${STATE.ocr?.backend ? `✓ ${esc(STATE.ocr.label)}（在本机运行，图片不上传）` : "还没安装文字识别组件：请重新运行一次安装脚本。没装的话，图文只会用正文文字。"}</div></div>
       <div class="field"><label class="check"><input type="checkbox" id="mirror" ${s.use_hf_mirror ? "checked" : ""}> 使用国内镜像下载模型（人在中国大陆时勾选；在海外不要勾）</label></div>
+      <div class="field"><label class="check"><input type="checkbox" id="keepAll" ${s.keep_all ? "checked" : ""}> 不跳过：除了超过 ${s.max_minutes} 分钟的长视频，其余都整理进学习库</label>
+        <div class="hint">不勾的话，没信息量的（画面为主、断续口播、残缺）、没说话的和广告会放进「已跳过」。勾上以后它们也照常润色、归类进学习库；没说话的视频按标题归类，正文写明「看原视频」。明显误收藏的（影视剧台词、时事这类「其他」）不管勾不勾都单独放着、不整理。只对之后新处理的生效，已经跳过的可以在「已跳过」里点「加入整理」。</div></div>
     </div>
     <div class="card form" style="margin-bottom:16px" id="backupCard">
       <h2>备份与恢复</h2>
@@ -1256,7 +1258,7 @@ async function renderSettings() {
       deep_model: $("#dModel").value.trim(), deep_api_key: $("#dKey").value.trim(), deep_prompt: $("#dPrompt").value.trim(),
       deep_chunk_chars: +$("#dChunk").value,
       focus_topic: $("#focus").value.trim(), only_relevant: $("#onlyRel").checked, categories: $("#cats").value,
-      whisper_model: $("#wm").value, asr_engine: $("#engine").value, use_subtitles: $("#useSubs").checked, max_minutes: +$("#maxMin").value, use_hf_mirror: $("#mirror").checked,
+      whisper_model: $("#wm").value, asr_engine: $("#engine").value, use_subtitles: $("#useSubs").checked, max_minutes: +$("#maxMin").value, use_hf_mirror: $("#mirror").checked, keep_all: $("#keepAll").checked,
       keep_video: $("#keepVideo2").checked, library_dir: $("#libDir").value.trim(), download_dir: $("#dlDir").value.trim(), browser: $("#browser").value, welcome_done: true,
       xhs_download_dir: $("#xDlDir").value.trim(), xhs_daily_cap: +$("#xCap").value || 400, web_parse_fallback: $("#xWeb").checked,
       xhs_delay: [Math.max(1, +$("#xDelayLo").value || 4), Math.max(+$("#xDelayLo").value || 4, +$("#xDelayHi").value || 9)],

@@ -113,6 +113,7 @@ DEFAULTS = {
     "max_minutes": 15,                  # 超长视频只转录前 N 分钟
     "library_dir": "",                  # 留空 = 程序目录下的 data/知识库
     "keep_video": True,                 # 处理过的视频留在本地视频库（学习库里随时能看原视频）
+    "keep_all": False,                  # 不跳过：除了超过 max_minutes 的长视频，其余都整理进学习库（没信息量、没说话、「其他」、广告也收）
     "skip_long": True,                  # 超过 max_minutes 的视频整条跳过（不只截前 N 分钟）
     "auto_extract": True,              # False = 只转文字，转好后停在「待提炼」，手动点「提炼」
     "import_dir": "",                   # 上次「导入本地文件夹」用的文件夹
