@@ -165,7 +165,10 @@ function show(id){if(notePending)saveNote();TP.cur=id;$$('#tptree .tpt').forEach
  for(const it of t.items){const src=document.getElementById('a'+it.id);let a;
   if(src){a=src.cloneNode(true);a.id='tpa'+it.id;a.classList.remove('gone','hide','now','tpsel');
    a.querySelectorAll('button.tpadd').forEach(b=>b.remove());  // 「删除」留着：在专题里删也是进回收站，各处一起隐藏
-   if(it.source==='search'){a.classList.add('tpsearch');a.querySelectorAll('button.del').forEach(b=>b.remove())}  // 代刷来的：本来就在回收站，专题里照常显示，用「移出专题」拿掉
+   if(it.source==='search'){a.classList.add('tpsearch');  // 代刷来的：只在专题里显示，学习库正文里本来就没有（记在回收站）
+    a.querySelectorAll('button.del').forEach(b=>b.remove());  // 所以「删除」换成自己的：从所有专题里拿掉，回收站里仍可恢复 / 彻底删除
+    const d=document.createElement('button');d.className='tp-bt';d.dataset.op='rmall';d.dataset.id=it.id;d.textContent='删除';
+    d.title='从专题里删掉（它记在回收站里，可以恢复或彻底删除）';(a.querySelector('.src')||a).append(d)}
    else if(isDel(it.id))a.classList.add('gone')}
   else{a=document.createElement('article');a.className='tp-missing';a.dataset.id=it.id;
    const why=it.missing?'这条已经从学习台删掉了。':it.status==='skipped'?'这条没进学习库正文（被跳过了），只能看原视频。'
@@ -186,6 +189,8 @@ document.addEventListener('click',async e=>{const b=e.target.closest('#ttopic [d
   else if(op==='tren'){const name=prompt('专题的新名字',t.name);if(!name)return;await post({op:'topic_rename',id:t.id,name})}
   else if(op==='tdel'){if(!confirm(`删除专题「${t.name}」？（只删专题，视频本身不动）`))return;await post({op:'topic_delete',id:t.id});TP.cur=null}
   else if(op==='rm'){await post({op:'remove',topic_id:t.id,ids:[+b.dataset.id]})}
+  else if(op==='rmall'){const id=+b.dataset.id;  // 代刷条目的「删除」：哪个专题里有它就从哪个专题拿掉
+   for(const x of TP.data.topics)if(x.items.some(i=>i.id===id))await post({op:'remove',topic_id:x.id,ids:[id]});toast('已删除，在回收站里可以恢复')}
   else if(op==='feed'){$('#tpfkw').value=t.name;$('#tpfeed').showModal();return}
   else if(op==='copy'){b.disabled=true;b.textContent='复制中…';
    try{const r=await post({op:'copy',topic_id:t.id});

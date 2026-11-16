@@ -575,16 +575,27 @@ class Worker:
         if ids is not None:
             ids = list(ids)
 
+        main_done = threading.Event()
+
         def loop(k):
             while not self.stopping():
                 if k == 0:
                     self._service_urgent()
+                    if ids is None:  # 处理到一半又有新的进了队列：总数跟着涨，进度条才对
+                        left = db.stats()["by_status"].get("queued", 0)
+                        self.state["total"] = max(self.state["total"], self.state["done"] + left + len(claimed))
                 with lock:
                     it = self._next(ids, exclude=claimed, local_only=k > 0,
                                     prefer=roots[k % len(roots)] if roots else None)
-                    if it is None:
+                    if it is not None:
+                        claimed.add(it["id"])
+                if it is None:
+                    if k == 0 or main_done.is_set():
                         return
-                    claimed.add(it["id"])
+                    # 并行的这几路只做本地文件：现在没有，但 0 号还在忙——中途可能又有本地文件进队列（比如把跳过的放回来），
+                    # 等一下再看，别早早收工让几百条全压在 0 号一路上
+                    time.sleep(2)
+                    continue
                 self.state.update(item_id=it["id"])
                 try:
                     self._process_one(it)
@@ -599,6 +610,7 @@ class Worker:
         for t in ts:
             t.start()
         loop(0)
+        main_done.set()
         while any(t.is_alive() for t in ts):  # 其它几路还在转写：这期间有登录检查也能马上做
             self._service_urgent()
             for t in ts:
