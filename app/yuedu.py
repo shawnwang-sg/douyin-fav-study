@@ -219,7 +219,7 @@ def polish(settings, it, log=print, force=False, topic=None, keep_low=False):
             continue
         if isinstance(d, list):
             d = d[0] if d else {}
-        res = _normalize(d, t)
+        res = _normalize(d, t, raw if keep_low else "")  # 「不跳过」：AI 只给了分类没给正文 → 用原稿当正文
         if topic:
             fit = d.get("topic_fit")
             res["topic_fit"] = (str(fit).strip().lower() not in ("false", "0", "no", "否")) if fit is not None else None
@@ -240,7 +240,7 @@ def polish(settings, it, log=print, force=False, topic=None, keep_low=False):
     return res, used_total
 
 
-def _normalize(d, t):
+def _normalize(d, t, fallback_body=""):
     tabs = [x["name"] for x in t["tabs"]]
     v = str(d.get("verdict") or "keep").strip()
     if v not in ("keep", "low_info", "move"):
@@ -256,7 +256,7 @@ def _normalize(d, t):
         return res
     if v == "move":
         return res
-    body = str(d.get("body") or "").strip()
+    body = str(d.get("body") or "").strip() or str(fallback_body or "").strip()
     if not body:
         raise llm.LLMError("AI 没有返回正文", retry=True)
     if res["tab"] not in tabs:
